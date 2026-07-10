@@ -86,6 +86,12 @@
         source.display_name || source.displayName || source.name,
       ),
       settings: isObject(source.settings) ? source.settings : {},
+      current_flow_context_id: String(
+        source.current_flow_context_id || source.currentFlowContextId || "",
+      ).trim(),
+      flow_context: isObject(source.flow_context || source.flowContext)
+        ? clone(source.flow_context || source.flowContext)
+        : null,
       image_variants: Array.isArray(source.image_variants)
         ? source.image_variants.filter(isObject).map(clone)
         : [],
@@ -276,6 +282,12 @@
     }
     if (isObject(patch.settings)) {
       project.settings = Object.assign({}, project.settings, patch.settings);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "current_flow_context_id")) {
+      project.current_flow_context_id = String(patch.current_flow_context_id || "").trim();
+    }
+    if (isObject(patch.flow_context)) {
+      project.flow_context = clone(patch.flow_context);
     }
     if (Array.isArray(patch.assets)) {
       project.assets = patch.assets.filter(isObject).map(clone);

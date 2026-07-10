@@ -1074,6 +1074,141 @@ button {
   font-size: 12px;
 }
 
+.project-gallery,
+.gallery-section,
+.gallery-media-list {
+  display: grid;
+  gap: 12px;
+}
+
+.gallery-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gallery-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.gallery-summary-row span {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  color: var(--af-muted);
+  background: var(--af-subtle);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.gallery-media-row {
+  display: grid;
+  grid-template-columns: 120px minmax(180px, 1.1fr) minmax(220px, 1.4fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  padding: 10px;
+  background: #fbfcfd;
+  border: 1px solid var(--af-line);
+  border-radius: var(--af-radius);
+}
+
+.gallery-preview-frame,
+.gallery-video-icon {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  color: var(--af-muted);
+  background: #eef3f1;
+  border: 1px solid var(--af-subtle);
+  border-radius: 6px;
+}
+
+.gallery-preview-frame img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.gallery-video-icon .material-symbols-outlined {
+  font-size: 30px;
+}
+
+.gallery-media-main,
+.gallery-media-facts {
+  min-width: 0;
+}
+
+.gallery-media-main {
+  display: grid;
+  gap: 6px;
+}
+
+.gallery-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.gallery-media-main h4,
+.gallery-media-main p,
+.gallery-media-facts dd,
+.gallery-media-facts dt {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.gallery-media-main h4 {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.gallery-media-main p,
+.gallery-media-facts {
+  color: var(--af-muted);
+  font-size: 12px;
+}
+
+.gallery-media-facts {
+  display: grid;
+  gap: 5px;
+}
+
+.gallery-media-facts div {
+  display: grid;
+  grid-template-columns: minmax(84px, 0.45fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.gallery-media-facts dt {
+  font-weight: 700;
+}
+
+.gallery-media-facts dd {
+  color: var(--af-text);
+}
+
+.gallery-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.gallery-row-actions .secondary-button {
+  min-height: 32px;
+  text-decoration: none;
+}
+
 .empty-inline {
   min-height: 92px;
   display: grid;
@@ -1231,7 +1366,8 @@ button {
 
 @media (max-width: 980px) {
   .video-queue-row,
-  .image-review-row {
+  .image-review-row,
+  .gallery-media-row {
     grid-template-columns: 1fr;
   }
 

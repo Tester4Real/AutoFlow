@@ -70,6 +70,7 @@
       return VIEWS.some((view) => view.id === viewId) ? viewId : "project";
     })(),
     domainState: null,
+    flowContext: null,
     isLoading: false,
     lastError: null,
   };
@@ -702,6 +703,15 @@
     return `${withoutExtension}.mp4`;
   }
 
+  function safeFolderName(value) {
+    return (
+      String(value || "AutoFlow Project")
+        .replace(/[<>:"|?*\x00-\x1f]/g, "-")
+        .replace(/[\\/]+/g, "-")
+        .trim() || "AutoFlow Project"
+    );
+  }
+
   function getVariantSourceFileName(variant) {
     return (
       variant?.generated_file_name ||
@@ -711,8 +721,78 @@
     );
   }
 
+  function getVariantDownloadUrl(variant) {
+    return (
+      variant?.data_url ||
+      variant?.preview_url ||
+      variant?.thumbnail_url ||
+      variant?.fife_url ||
+      ""
+    );
+  }
+
   function getVariantMediaId(variant) {
     return String(variant?.media_id || variant?.mediaId || "").trim();
+  }
+
+  function getVariantFlowContextId(variant) {
+    return String(
+      variant?.flow_context_id ||
+        variant?.flowContextId ||
+        variant?.media_flow_context_id ||
+        variant?.mediaFlowContextId ||
+        "",
+    ).trim();
+  }
+
+  function getActiveFlowContextId(project) {
+    return String(
+      studioState.flowContext?.flow_context_id ||
+        project?.current_flow_context_id ||
+        project?.flow_context?.flow_context_id ||
+        "",
+    ).trim();
+  }
+
+  function buildFlowContextId(connectionState) {
+    const status = String(connectionState?.status || "").toLowerCase();
+    const projectId = String(connectionState?.projectId || connectionState?.project_id || "").trim();
+    if (status !== "connected" || !projectId) return "";
+    return `flow:${projectId}`;
+  }
+
+  function buildFlowContextFromConnection(connectionState) {
+    const status = String(connectionState?.status || "disconnected").toLowerCase();
+    const projectId = String(connectionState?.projectId || connectionState?.project_id || "").trim();
+    const flowContextId = buildFlowContextId(connectionState);
+    return {
+      flow_context_id: flowContextId,
+      status: flowContextId ? "connected" : status || "disconnected",
+      project_id: projectId,
+      url: connectionState?.url || "",
+      last_error: connectionState?.lastError || connectionState?.last_error || "",
+    };
+  }
+
+  function getFlowMediaReviewReason(project, variant) {
+    if (!variant) return "";
+    const mediaId = getVariantMediaId(variant);
+    if (!mediaId) return "Needs Reference Upload: selected image has no Flow media ID.";
+
+    const currentContextId = getActiveFlowContextId(project);
+    if (!currentContextId) {
+      return "Disconnected: current Flow context is unavailable for this media ID.";
+    }
+
+    const mediaContextId = getVariantFlowContextId(variant);
+    if (!mediaContextId) {
+      return "Needs Reference Upload: selected image media has no Flow context cache.";
+    }
+    if (mediaContextId !== currentContextId) {
+      return "Stale Context: selected image media belongs to a different Flow project.";
+    }
+
+    return "";
   }
 
   function getSelectedVariantForPrompt(project, promptRecord) {
@@ -799,6 +879,10 @@
       start_variant_id: selectedVariant.variant_id,
       start_image_file_name: sourceFileName,
       selected_variant_generated_file_name: selectedVariant.generated_file_name || "",
+      flow_context_id:
+        getVariantInputValue(variantInput, "flow_context_id", "flowContextId") ||
+        getActiveFlowContextId(project),
+      start_frame_flow_context_id: getVariantFlowContextId(selectedVariant),
       animation_prompt: animationPrompt,
       expected_output_file_name:
         existingJob?.expected_output_file_name || buildVideoOutputFileName(promptFileName),
@@ -811,13 +895,15 @@
     });
   }
 
-  function getVideoJobReviewReason(job, promptRecord, selectedVariant) {
+  function getVideoJobReviewReason(project, job, promptRecord, selectedVariant) {
     if (!promptRecord) return "Prompt Record is missing.";
     if (!getPromptAnimationPrompt(promptRecord)) return "Animation prompt is missing.";
     if (!selectedVariant) return "Select an image variant before queueing video.";
     if (isVariantMissingLocalFile(selectedVariant)) {
       return "Selected image needs local file repair before video work.";
     }
+    const flowReason = getFlowMediaReviewReason(project, selectedVariant);
+    if (flowReason) return flowReason;
     if (job.selected_variant_id !== selectedVariant.variant_id) {
       return "Selected image changed after this draft was prepared.";
     }
@@ -866,7 +952,9 @@
       const terminalJob = job && (status === "running" || status === "complete");
       const selectedFileName = selectedVariant ? getVariantSourceFileName(selectedVariant) : "";
       const selectedMissing = selectedVariant && isVariantMissingLocalFile(selectedVariant);
-      const reviewReason = job ? getVideoJobReviewReason(job, record, selectedVariant) : "";
+      const reviewReason = job
+        ? getVideoJobReviewReason(project, job, record, selectedVariant)
+        : "";
       let itemStatus = status === "draftable" ? "draft" : status;
       let reason = "";
       let canCreateDraft = false;
@@ -942,10 +1030,408 @@
         can_run: !!job && status === "ready",
         can_retry: !!job && status === "failed",
         can_stop: !!job && status === "running",
+        can_repair_start_frame:
+          !!job &&
+          !!reason &&
+          /(Needs Reference Upload|Stale Context|Disconnected)/.test(reason) &&
+          status !== "running" &&
+          status !== "complete",
       };
     });
 
     return sortVideoQueueItems(items);
+  }
+
+  function getProjectGalleryItems(project) {
+    if (!project) {
+      return {
+        image_items: [],
+        video_items: [],
+        items: [],
+        selected_image_count: 0,
+        video_output_count: 0,
+      };
+    }
+
+    const promptRecords = getProjectPromptRecords(project);
+    const promptById = new Map(promptRecords.map((record) => [record.prompt_id, record]));
+    const imageItems = getProjectImageVariants(project)
+      .filter((variant) => !variant.project_id || variant.project_id === project.project_id)
+      .map((variant, sourceIndex) => {
+        const promptRecord = promptById.get(variant.prompt_id) || {};
+        const selectedVariantId = String(
+          promptRecord.selected_variant_id || promptRecord.selectedVariantId || "",
+        ).trim();
+        const isSelected =
+          (!!selectedVariantId && selectedVariantId === variant.variant_id) ||
+          variant.is_selected === true;
+        const missingLocal = isVariantMissingLocalFile(variant);
+        const statusView = isSelected
+          ? missingLocal
+            ? { label: "Selected - repair needed", tone: "warning" }
+            : { label: "Selected", tone: "success" }
+          : missingLocal
+            ? { label: "Missing local file", tone: "warning" }
+            : variant.status === "failed" || variant.file_state === "failed"
+              ? { label: "Failed", tone: "danger" }
+              : { label: "Variant", tone: "info" };
+
+        return {
+          id: variant.variant_id || `variant-${sourceIndex}`,
+          type: "image",
+          prompt_id: variant.prompt_id || "",
+          prompt_file_name:
+            promptRecord.file_name || variant.expected_file_name || variant.generated_file_name || "",
+          prompt_text: promptRecord.image_prompt || "",
+          expected_file_name: variant.expected_file_name || promptRecord.file_name || "",
+          generated_file_name:
+            variant.generated_file_name ||
+            variant.local_file_name ||
+            getVariantSourceFileName(variant) ||
+            "",
+          finalized_download_path:
+            variant.finalized_download_path || promptRecord.selected_final_download_path || "",
+          finalized_as_file_name:
+            variant.finalized_as_file_name || promptRecord.selected_final_file_name || "",
+          local_file_name: variant.local_file_name || "",
+          local_path: variant.local_path || "",
+          download_id: variant.download_id || "",
+          preview_url: variant.thumbnail_url || variant.data_url || variant.preview_url || variant.fife_url || "",
+          status_label: statusView.label,
+          tone: statusView.tone,
+          is_selected: isSelected,
+          updated_at: variant.updated_at || variant.created_at || "",
+          source_index: Number(variant.source_index || sourceIndex || 0),
+        };
+      });
+
+    const videoItems = getProjectVideoJobs(project)
+      .filter((job) => {
+        return (
+          (!job.project_id || job.project_id === project.project_id) &&
+          normalizeVideoJobStatus(job) === "complete"
+        );
+      })
+      .map((job, sourceIndex) => {
+        const promptRecord = promptById.get(job.prompt_id) || {};
+        const promptFileName = promptRecord.file_name || job.source_prompt_file_name || "";
+        const outputFileName =
+          job.output_file_name ||
+          job.expected_output_file_name ||
+          buildVideoOutputFileName(promptFileName);
+
+        return {
+          id: job.job_id || `video-${sourceIndex}`,
+          type: "video",
+          job_id: job.job_id || "",
+          prompt_id: job.prompt_id || "",
+          prompt_file_name: promptFileName,
+          prompt_text: promptRecord.image_prompt || "",
+          expected_file_name: job.expected_output_file_name || outputFileName,
+          output_file_name: outputFileName,
+          video_url: job.video_url || "",
+          output_media_id: job.output_media_id || "",
+          selected_variant_id: job.selected_variant_id || job.start_variant_id || "",
+          start_image_file_name: job.start_image_file_name || "",
+          status_label: "Complete",
+          tone: "success",
+          updated_at: job.completed_at || job.updated_at || job.created_at || "",
+          source_index: Number(promptRecord.source_index || sourceIndex || 0),
+        };
+      });
+
+    const items = imageItems
+      .concat(videoItems)
+      .sort((left, right) => {
+        if (left.source_index !== right.source_index) return left.source_index - right.source_index;
+        if (left.type !== right.type) return left.type === "image" ? -1 : 1;
+        return String(left.id).localeCompare(String(right.id));
+      });
+
+    return {
+      image_items: imageItems,
+      video_items: videoItems,
+      items,
+      selected_image_count: imageItems.filter((item) => item.is_selected).length,
+      video_output_count: videoItems.length,
+    };
+  }
+
+  function buildCanonicalImageFileName(fileName) {
+    const parts = normalizeRelativeFileName(fileName || "image.png");
+    const leaf = parts.pop() || "image.png";
+    const hasExtension = /\.[^/.]+$/i.test(leaf);
+    parts.push(hasExtension ? leaf : `${leaf}.png`);
+    return parts.join("/");
+  }
+
+  function getSelectedImageFinalizationItems(project) {
+    if (!project) return [];
+
+    const variants = getProjectImageVariants(project);
+    return getProjectPromptRecords(project).map((record, sourceIndex) => {
+      const selectedVariant = getSelectedVariantForPrompt(project, record);
+      const canonicalFileName = buildCanonicalImageFileName(
+        record.file_name || selectedVariant?.expected_file_name || "",
+      );
+      const sourceFileName = selectedVariant ? getVariantSourceFileName(selectedVariant) : "";
+      const sourceUrl = selectedVariant ? getVariantDownloadUrl(selectedVariant) : "";
+      const selectedMissing = selectedVariant && isVariantMissingLocalFile(selectedVariant);
+      const variantExists =
+        selectedVariant &&
+        variants.some((variant) => variant.variant_id === selectedVariant.variant_id);
+      let reason = "";
+
+      if (!selectedVariant || !variantExists) {
+        reason = "Select an Image Variant before finalizing.";
+      } else if (selectedMissing) {
+        reason = "Selected image needs local file repair before finalizing.";
+      } else if (!sourceUrl) {
+        reason = "Selected image has no browser-accessible source URL.";
+      }
+
+      return {
+        prompt_id: record.prompt_id || "",
+        variant_id: selectedVariant?.variant_id || "",
+        canonical_file_name: canonicalFileName,
+        source_file_name: sourceFileName,
+        source_url: sourceUrl,
+        prompt_file_name: record.file_name || "",
+        prompt_text: record.image_prompt || "",
+        can_finalize: !reason,
+        reason,
+        source_index: Number(record.source_index || sourceIndex || 0),
+      };
+    });
+  }
+
+  function downloadFile(url, filename) {
+    const downloads = root.chrome?.downloads;
+    if (!downloads || typeof downloads.download !== "function") {
+      return Promise.reject(new Error("Chrome downloads API unavailable."));
+    }
+
+    return new Promise((resolve, reject) => {
+      try {
+        downloads.download({ url, filename, saveAs: false }, (downloadId) => {
+          const lastError = root.chrome?.runtime?.lastError;
+          if (lastError) {
+            reject(new Error(lastError.message || "Download failed."));
+            return;
+          }
+          resolve(downloadId || null);
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  async function finalizeSelectedImages() {
+    const project = studioState.activeProject;
+    if (!project) {
+      throw new Error("No active Project selected.");
+    }
+
+    const items = getSelectedImageFinalizationItems(project);
+    const readyItems = items.filter((item) => item.can_finalize);
+    const blockedItems = items.filter((item) => !item.can_finalize && item.variant_id);
+    const missingSelectionCount = items.filter((item) => !item.variant_id).length;
+
+    if (!readyItems.length) {
+      throw new Error(
+        missingSelectionCount
+          ? "Select variants in Image Review before finalizing selected images."
+          : blockedItems[0]?.reason || "No selected images can be finalized.",
+      );
+    }
+
+    const timestamp = new Date().toISOString();
+    const folder = safeFolderName(project.display_name || project.name || "AutoFlow Project");
+    const downloaded = [];
+    const failed = [];
+
+    for (const item of readyItems) {
+      const downloadPath = ["AutoFlow", folder, "selected-images", item.canonical_file_name]
+        .filter(Boolean)
+        .join("/");
+      try {
+        const downloadId = await downloadFile(item.source_url, downloadPath);
+        downloaded.push(Object.assign({}, item, { download_id: downloadId, download_path: downloadPath }));
+      } catch (error) {
+        failed.push(
+          Object.assign({}, item, {
+            error_message: error.message || "Download failed.",
+            download_path: downloadPath,
+          }),
+        );
+      }
+    }
+
+    if (downloaded.length) {
+      const downloadedByPrompt = new Map(downloaded.map((item) => [item.prompt_id, item]));
+      const downloadedByVariant = new Map(downloaded.map((item) => [item.variant_id, item]));
+      const nextPromptRecords = getProjectPromptRecords(project).map((record) => {
+        const item = downloadedByPrompt.get(record.prompt_id);
+        if (!item) return record;
+        return Object.assign({}, record, {
+          selected_final_file_name: item.canonical_file_name,
+          selected_final_source_file_name: item.source_file_name,
+          selected_final_download_path: item.download_path,
+          selected_final_download_id: item.download_id,
+          selected_finalized_at: timestamp,
+          updated_at: timestamp,
+        });
+      });
+      const nextVariants = getProjectImageVariants(project).map((variant) => {
+        const item = downloadedByVariant.get(variant.variant_id);
+        if (!item) return variant;
+        return Object.assign({}, variant, {
+          finalized_as_file_name: item.canonical_file_name,
+          finalized_download_path: item.download_path,
+          finalized_download_id: item.download_id,
+          finalized_at: timestamp,
+          updated_at: timestamp,
+        });
+      });
+
+      await updateActiveProject({
+        prompt_records: nextPromptRecords,
+        image_variants: nextVariants,
+      });
+    }
+
+    return {
+      downloaded,
+      blocked: blockedItems,
+      failed,
+      missing_selection_count: missingSelectionCount,
+    };
+  }
+
+  function normalizeMediaLookupKey(value) {
+    const normalized = normalizeRelativeFileName(value || "")
+      .join("/")
+      .toLowerCase();
+    return normalized.replace(/\s+\(\d+\)(?=\.[^/.]+$)/, "");
+  }
+
+  function mediaLookupKeysFor(value) {
+    const key = normalizeMediaLookupKey(value);
+    if (!key) return [];
+    const leaf = key.split("/").filter(Boolean).pop() || "";
+    return Array.from(new Set([key, leaf].filter(Boolean)));
+  }
+
+  function buildMediaFileIndex(files) {
+    const index = new Map();
+    Array.prototype.slice.call(files || []).forEach((file) => {
+      const path = file.webkitRelativePath || file.name || "";
+      const keys = mediaLookupKeysFor(path).concat(mediaLookupKeysFor(file.name || ""));
+      keys.forEach((key) => {
+        if (key && !index.has(key)) index.set(key, file);
+      });
+    });
+    return index;
+  }
+
+  function findMediaFileMatch(index, names) {
+    for (const name of names) {
+      for (const key of mediaLookupKeysFor(name)) {
+        if (index.has(key)) return index.get(key);
+      }
+    }
+    return null;
+  }
+
+  async function syncProjectMediaFromFiles(files) {
+    const project = studioState.activeProject;
+    if (!project) {
+      throw new Error("No active Project selected.");
+    }
+
+    const fileIndex = buildMediaFileIndex(files);
+    if (!fileIndex.size) {
+      throw new Error("Select a media folder or files to sync.");
+    }
+
+    const timestamp = new Date().toISOString();
+    const promptRecords = getProjectPromptRecords(project);
+    const promptById = new Map(promptRecords.map((record) => [record.prompt_id, record]));
+    let variantMatches = 0;
+    let selectedMatches = 0;
+    let videoMatches = 0;
+
+    const nextVariants = getProjectImageVariants(project).map((variant) => {
+      const promptRecord = promptById.get(variant.prompt_id) || {};
+      const isSelected =
+        promptRecord.selected_variant_id === variant.variant_id || variant.is_selected === true;
+      const names = [
+        variant.generated_file_name,
+        variant.local_file_name,
+        isSelected ? variant.expected_file_name : "",
+        isSelected ? promptRecord.selected_final_file_name : "",
+        isSelected ? promptRecord.selected_variant_generated_file_name : "",
+      ];
+      const match = findMediaFileMatch(fileIndex, names);
+      if (!match) return variant;
+      const matchPath = match.webkitRelativePath || match.name || "";
+      variantMatches += 1;
+      if (isSelected) selectedMatches += 1;
+      return Object.assign({}, variant, {
+        local_file_name: match.name || variant.local_file_name || variant.generated_file_name || "",
+        local_path: matchPath,
+        file_state: "available",
+        repair_state: "",
+        status: "available",
+        synced_at: timestamp,
+        updated_at: timestamp,
+      });
+    });
+
+    const nextPromptRecords = promptRecords.map((record) => {
+      const selectedVariant = nextVariants.find(
+        (variant) =>
+          variant.prompt_id === record.prompt_id &&
+          variant.variant_id === record.selected_variant_id &&
+          variant.local_path,
+      );
+      if (!selectedVariant) return record;
+      return Object.assign({}, record, {
+        selected_variant_generated_file_name:
+          selectedVariant.generated_file_name || record.selected_variant_generated_file_name || "",
+        selected_variant_local_path: selectedVariant.local_path || "",
+        selected_media_synced_at: timestamp,
+        updated_at: timestamp,
+      });
+    });
+
+    const nextVideoJobs = getProjectVideoJobs(project).map((job) => {
+      const names = [job.output_file_name, job.expected_output_file_name, job.local_file_name];
+      const match = findMediaFileMatch(fileIndex, names);
+      if (!match) return job;
+      videoMatches += 1;
+      return Object.assign({}, job, {
+        local_file_name: match.name || job.output_file_name || job.expected_output_file_name || "",
+        local_path: match.webkitRelativePath || match.name || "",
+        output_file_state: "available",
+        synced_at: timestamp,
+        updated_at: timestamp,
+      });
+    });
+
+    await updateActiveProject({
+      image_variants: nextVariants,
+      prompt_records: nextPromptRecords,
+      video_jobs: nextVideoJobs,
+    });
+
+    return {
+      variant_matches: variantMatches,
+      selected_matches: selectedMatches,
+      video_matches: videoMatches,
+      unresolved_variants: nextVariants.filter(isVariantMissingLocalFile).length,
+    };
   }
 
   function normalizeRelativeFileName(value) {
@@ -1059,6 +1545,7 @@
       local_file_name: localFileName,
       local_path: getVariantInputValue(variantInput, "local_path", "localPath"),
       media_id: getVariantInputValue(variantInput, "media_id", "mediaId"),
+      flow_context_id: getActiveFlowContextId(project),
       download_id: getVariantInputValue(variantInput, "download_id", "downloadId"),
       thumbnail_url: getVariantInputValue(variantInput, "thumbnail_url", "thumbnailUrl"),
       fife_url: getVariantInputValue(variantInput, "fife_url", "fifeUrl"),
@@ -1117,7 +1604,7 @@
       blocked:
         countProjectItems(project, ["blocked_prompts", "blockedPrompts"]) +
         blockedPromptRecords.length,
-      gallery: countProjectItems(project, ["gallery", "downloads", "outputs"]),
+      gallery: getProjectGalleryItems(project).items.length,
       images: countProjectItems(project, ["image_variants", "imageVariants", "images"]),
       prompts:
         countProjectItems(project, ["prompts", "prompt_index", "promptIndex"]) +
@@ -1153,6 +1640,7 @@
       const domainState = await domain.load();
       studioState.domainState = domainState;
       studioState.activeProject = resolveActiveProject(domainState);
+      await refreshFlowContext();
       studioState.lastError = null;
       return studioState;
     } catch (error) {
@@ -1177,6 +1665,7 @@
 
     studioState.domainState = result.state;
     studioState.activeProject = resolveActiveProject(result.state);
+    await refreshFlowContext();
     studioState.lastError = null;
     return studioState;
   }
@@ -1202,6 +1691,56 @@
     studioState.activeProject = resolveActiveProject(result.state);
     studioState.lastError = null;
     return studioState;
+  }
+
+  function hasFlowContextChanged(project, context) {
+    const previous = project?.flow_context || {};
+    return (
+      String(project?.current_flow_context_id || "") !== String(context.flow_context_id || "") ||
+      String(previous.flow_context_id || "") !== String(context.flow_context_id || "") ||
+      String(previous.status || "") !== String(context.status || "") ||
+      String(previous.project_id || "") !== String(context.project_id || "") ||
+      String(previous.url || "") !== String(context.url || "")
+    );
+  }
+
+  async function refreshFlowContext() {
+    const project = studioState.activeProject;
+    const runtime = root.chrome?.runtime;
+    if (!runtime || typeof runtime.sendMessage !== "function") {
+      studioState.flowContext =
+        project?.flow_context ||
+        (project?.current_flow_context_id
+          ? { flow_context_id: project.current_flow_context_id, status: "unknown" }
+          : { flow_context_id: "", status: "disconnected" });
+      return studioState.flowContext;
+    }
+
+    let response = null;
+    try {
+      response = await runtime.sendMessage({ type: "GET_CONNECTION_STATE" });
+    } catch (error) {
+      response = {
+        state: {
+          status: "disconnected",
+          lastError: error.message || "Connection check failed.",
+        },
+      };
+    }
+
+    const context = Object.assign(buildFlowContextFromConnection(response?.state || response), {
+      updated_at: new Date().toISOString(),
+    });
+    studioState.flowContext = context;
+
+    if (project && hasFlowContextChanged(project, context)) {
+      await updateActiveProject({
+        current_flow_context_id: context.flow_context_id,
+        flow_context: context,
+      });
+    }
+
+    return context;
   }
 
   async function createAsset(input) {
@@ -1757,7 +2296,7 @@
       (record) => record.prompt_id === targetJob.prompt_id,
     );
     const selectedVariant = getSelectedVariantForPrompt(project, promptRecord);
-    const reviewReason = getVideoJobReviewReason(targetJob, promptRecord, selectedVariant);
+      const reviewReason = getVideoJobReviewReason(project, targetJob, promptRecord, selectedVariant);
     const timestamp = new Date().toISOString();
 
     if (reviewReason) {
@@ -1914,7 +2453,7 @@
       (record) => record.prompt_id === targetJob.prompt_id,
     );
     const selectedVariant = getSelectedVariantForPrompt(project, promptRecord);
-    const reviewReason = getVideoJobReviewReason(targetJob, promptRecord, selectedVariant);
+    const reviewReason = getVideoJobReviewReason(project, targetJob, promptRecord, selectedVariant);
     if (reviewReason) {
       await updateActiveProject({
         video_jobs: videoJobs.map((job) =>
@@ -1994,12 +2533,117 @@
         run_batch_id: targetJob.job_id,
         run_prompt_index: 0,
         run_started_at: timestamp,
+        flow_context_id: getActiveFlowContextId(project),
+        start_frame_flow_context_id: getVariantFlowContextId(selectedVariant),
         error_message: "",
         updated_at: timestamp,
       });
     });
 
     await updateActiveProject({ video_jobs: nextJobs });
+    return nextJobs.find((job) => job.job_id === jobKey);
+  }
+
+  async function repairVideoJobStartFrame(jobId) {
+    const project = studioState.activeProject;
+    if (!project) {
+      throw new Error("No active Project selected.");
+    }
+
+    const currentContextId = getActiveFlowContextId(project);
+    if (!currentContextId) {
+      throw new Error("Connect to the current Flow project before repairing the start frame.");
+    }
+
+    const jobKey = String(jobId || "").trim();
+    const videoJobs = getProjectVideoJobs(project);
+    const targetJob = videoJobs.find((job) => job.job_id === jobKey);
+    if (!targetJob) {
+      throw new Error(`Video job not found: ${jobKey}.`);
+    }
+
+    const promptRecord = getProjectPromptRecords(project).find(
+      (record) => record.prompt_id === targetJob.prompt_id,
+    );
+    const selectedVariant = getSelectedVariantForPrompt(project, promptRecord);
+    if (!selectedVariant) {
+      throw new Error("Select an Image Variant before repairing the start frame.");
+    }
+
+    const frameFileName =
+      selectedVariant.local_file_name ||
+      selectedVariant.generated_file_name ||
+      promptRecord?.selected_variant_generated_file_name ||
+      selectedVariant.expected_file_name ||
+      "";
+    if (!frameFileName) {
+      throw new Error("Selected image has no local filename to upload.");
+    }
+
+    const runtime = root.chrome?.runtime;
+    if (!runtime || typeof runtime.sendMessage !== "function") {
+      throw new Error("Chrome runtime messaging unavailable.");
+    }
+
+    const timestamp = new Date().toISOString();
+    let uploadResponse = null;
+    try {
+      uploadResponse = await runtime.sendMessage({
+        type: "UPLOAD_CACHED_FRAME",
+        fileName: frameFileName,
+      });
+    } catch (error) {
+      uploadResponse = { ok: false, error: error.message || "Start frame upload failed." };
+    }
+
+    if (!uploadResponse || uploadResponse.ok === false || !uploadResponse.mediaId) {
+      const message = uploadResponse?.error || "Start frame upload failed.";
+      await updateActiveProject({
+        video_jobs: videoJobs.map((job) =>
+          job.job_id === jobKey
+            ? Object.assign({}, job, {
+                status: "needs_review",
+                needs_review_reason: `Needs Reference Upload: ${message}`,
+                updated_at: timestamp,
+              })
+            : job,
+        ),
+      });
+      throw new Error(`Needs Reference Upload: ${message}`);
+    }
+
+    const nextVariants = getProjectImageVariants(project).map((variant) => {
+      if (variant.variant_id !== selectedVariant.variant_id) return variant;
+      return Object.assign({}, variant, {
+        media_id: uploadResponse.mediaId,
+        flow_context_id: currentContextId,
+        media_uploaded_at: timestamp,
+        updated_at: timestamp,
+      });
+    });
+    const nextJobs = videoJobs.map((job) => {
+      if (job.job_id !== jobKey) return job;
+      const previousStatus = normalizeVideoJobStatus(job);
+      return Object.assign({}, job, {
+        status: previousStatus === "failed" || previousStatus === "needs_review" ? "ready" : previousStatus,
+        selected_variant_id: selectedVariant.variant_id,
+        start_variant_id: selectedVariant.variant_id,
+        start_image_file_name: getVariantSourceFileName(selectedVariant),
+        selected_variant_generated_file_name: selectedVariant.generated_file_name || "",
+        flow_context_id: currentContextId,
+        start_frame_flow_context_id: currentContextId,
+        repaired_at: timestamp,
+        needs_review_reason: "",
+        error_message: "",
+        updated_at: timestamp,
+      });
+    });
+
+    await updateActiveProject({
+      image_variants: nextVariants,
+      video_jobs: nextJobs,
+    });
+
     return nextJobs.find((job) => job.job_id === jobKey);
   }
 
@@ -2169,15 +2813,18 @@
     createOrUpdateVideoDraft,
     createAsset,
     formatDate,
+    finalizeSelectedImages,
     getAssetTypeDefinition,
     getCounts,
     getFilteredAssets,
     getImageGenerationGate,
     getProjectImageGenerationRuns,
     getProjectImageVariants,
+    getProjectGalleryItems,
     getProjectPromptImports,
     getProjectPromptRecords,
     getProjectVideoJobs,
+    getSelectedImageFinalizationItems,
     getVideoQueueItems,
     getActiveAssets(project) {
       return getProjectAssets(project).filter(isAssetActive);
@@ -2200,11 +2847,14 @@
     removeVideoJob,
     recordImageGenerationRunVariants,
     readTextFile,
+    refreshFlowContext,
+    repairVideoJobStartFrame,
     resolveActiveProjectPromptReferences,
     buildImageVariantFileName,
     selectImageVariant,
     startImageGenerationRun,
     runVideoJob,
+    syncProjectMediaFromFiles,
     stopVideoJob,
     setActiveProject,
     setAssetDisabled,

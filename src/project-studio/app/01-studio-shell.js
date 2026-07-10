@@ -252,10 +252,14 @@
 
   function renderProjectFacts(project, domainState) {
     if (!project) return "";
+    const flowContext = project.flow_context || {};
+    const flowStatus = flowContext.status || (project.current_flow_context_id ? "unknown" : "disconnected");
 
     const facts = [
       ["Project name", getProjectName(project)],
       ["Project ID", project.project_id],
+      ["Flow context", flowStatus],
+      ["Flow project", flowContext.project_id || project.current_flow_context_id || "Not connected"],
       ["Created", stateApi.formatDate(project.created_at)],
       ["Updated", stateApi.formatDate(project.updated_at)],
       ["Schema", `v${domainState?.schema_version || "?"}`],
@@ -763,6 +767,7 @@
         const moveDisabled = item.can_move ? "" : "disabled";
         const runDisabled = item.can_run || item.can_retry ? "" : "disabled";
         const stopDisabled = item.can_stop ? "" : "disabled";
+        const repairDisabled = item.can_repair_start_frame ? "" : "disabled";
         const draftLabel = item.create_label || "Create Draft";
         const queueLabel = item.status === "ready" ? "Ready" : "Add to Queue";
         const runLabel = item.can_retry ? "Retry" : "Run";
@@ -800,7 +805,9 @@
           item.job_id,
         )}" ${runDisabled}>${escapeHtml(
           runLabel,
-        )}</button><button class="secondary-button video-stop-button" type="button" data-job-id="${escapeHtml(
+        )}</button><button class="secondary-button video-repair-button" type="button" data-job-id="${escapeHtml(
+          item.job_id,
+        )}" ${repairDisabled}>Repair Frame</button><button class="secondary-button video-stop-button" type="button" data-job-id="${escapeHtml(
           item.job_id,
         )}" ${stopDisabled}>Stop</button></div></article>`;
       })
@@ -811,6 +818,110 @@
     )} ready, ${escapeHtml(draftCount)} draft, ${escapeHtml(
       reviewCount,
     )} review</span></div><div class="video-queue-list">${rows}</div></section>`;
+  }
+
+  function renderProjectGallery(project) {
+    const gallery =
+      typeof stateApi.getProjectGalleryItems === "function"
+        ? stateApi.getProjectGalleryItems(project)
+        : { image_items: [], video_items: [], items: [] };
+    const finalizationItems =
+      typeof stateApi.getSelectedImageFinalizationItems === "function"
+        ? stateApi.getSelectedImageFinalizationItems(project)
+        : [];
+    const imageItems = gallery.image_items || [];
+    const videoItems = gallery.video_items || [];
+    const finalizableCount = finalizationItems.filter((item) => item.can_finalize).length;
+    const missingSelectionCount = finalizationItems.filter((item) => !item.variant_id).length;
+    const finalizeDisabled = finalizableCount ? "" : " disabled";
+    const finalizeReason = finalizableCount
+      ? `${finalizableCount} selected image${finalizableCount === 1 ? "" : "s"} ready`
+      : missingSelectionCount
+        ? "Select variants in Image Review before finalizing."
+        : "No selected images can be finalized.";
+
+    if (!gallery.items.length) {
+      return '<section class="section-band project-gallery"><div class="section-title-row"><h3>Gallery / Downloads</h3><span class="form-status">0 items</span></div><div class="empty-inline">No active-project media has been recorded yet.</div></section>';
+    }
+
+    const imageRows = imageItems.length
+      ? imageItems
+          .map((item) => {
+            const preview = item.preview_url
+              ? `<img src="${escapeHtml(item.preview_url)}" alt="" loading="lazy" />`
+              : '<span class="material-symbols-outlined">image</span>';
+            const localText =
+              item.finalized_download_path ||
+              item.local_path ||
+              item.local_file_name ||
+              item.download_id ||
+              "No local file link";
+            return `<article class="gallery-media-row gallery-image-row" data-prompt-id="${escapeHtml(
+              item.prompt_id,
+            )}"><div class="gallery-preview-frame">${preview}</div><div class="gallery-media-main"><div class="gallery-chip-row"><span class="state-chip primary">Image</span><span class="state-chip ${escapeHtml(
+              item.tone,
+            )}">${escapeHtml(item.status_label)}</span></div><h4 title="${escapeHtml(
+              item.generated_file_name,
+            )}">${escapeHtml(item.generated_file_name || "Image variant")}</h4><p title="${escapeHtml(
+              item.prompt_text,
+            )}">${escapeHtml(item.prompt_text || item.prompt_file_name || "No prompt text")}</p></div><dl class="gallery-media-facts"><div><dt>Prompt</dt><dd title="${escapeHtml(
+              item.prompt_file_name,
+            )}">${escapeHtml(item.prompt_file_name || "Untitled prompt")}</dd></div><div><dt>Canonical filename</dt><dd title="${escapeHtml(
+              item.expected_file_name,
+            )}">${escapeHtml(item.expected_file_name || "Not set")}</dd></div><div><dt>Local</dt><dd title="${escapeHtml(
+              localText,
+            )}">${escapeHtml(localText)}</dd></div><div><dt>Updated</dt><dd>${escapeHtml(
+              stateApi.formatDate(item.updated_at),
+            )}</dd></div></dl><div class="gallery-row-actions"><button class="secondary-button gallery-jump-button" type="button" data-view="images">Image Review</button></div></article>`;
+          })
+          .join("")
+      : '<div class="empty-inline">No image variants recorded for this Project.</div>';
+
+    const videoRows = videoItems.length
+      ? videoItems
+          .map((item) => {
+            const outputRef = item.video_url || item.output_media_id || item.output_file_name || "Output metadata only";
+            const outputAction = item.video_url
+              ? `<a class="secondary-button" href="${escapeHtml(
+                  item.video_url,
+                )}" target="_blank" rel="noreferrer">Open output</a>`
+              : '<button class="secondary-button gallery-jump-button" type="button" data-view="video">Video Queue</button>';
+            return `<article class="gallery-media-row gallery-video-row" data-job-id="${escapeHtml(
+              item.job_id,
+            )}"><div class="gallery-video-icon"><span class="material-symbols-outlined">movie</span></div><div class="gallery-media-main"><div class="gallery-chip-row"><span class="state-chip primary">Video</span><span class="state-chip ${escapeHtml(
+              item.tone,
+            )}">${escapeHtml(item.status_label)}</span></div><h4 title="${escapeHtml(
+              item.output_file_name,
+            )}">${escapeHtml(item.output_file_name || "Video output")}</h4><p title="${escapeHtml(
+              item.prompt_text,
+            )}">${escapeHtml(item.prompt_text || item.prompt_file_name || "No prompt text")}</p></div><dl class="gallery-media-facts"><div><dt>Prompt</dt><dd title="${escapeHtml(
+              item.prompt_file_name,
+            )}">${escapeHtml(item.prompt_file_name || "Untitled prompt")}</dd></div><div><dt>Start frame</dt><dd title="${escapeHtml(
+              item.start_image_file_name,
+            )}">${escapeHtml(item.start_image_file_name || "Selected variant")}</dd></div><div><dt>Output</dt><dd title="${escapeHtml(
+              outputRef,
+            )}">${escapeHtml(outputRef)}</dd></div><div><dt>Completed</dt><dd>${escapeHtml(
+              stateApi.formatDate(item.updated_at),
+            )}</dd></div></dl><div class="gallery-row-actions">${outputAction}</div></article>`;
+          })
+          .join("")
+      : '<div class="empty-inline">No completed video outputs recorded for this Project.</div>';
+
+    return `<section class="section-band project-gallery"><div class="section-title-row"><h3>Gallery / Downloads</h3><span class="form-status">${escapeHtml(
+      gallery.items.length,
+    )} active-project item${gallery.items.length === 1 ? "" : "s"}</span></div><div class="gallery-actions"><button id="btn-finalize-selected-images" class="primary-button" type="button"${finalizeDisabled}>Finalize Selected Images</button><button id="btn-sync-project-media" class="secondary-button" type="button">Sync Folder</button><input id="project-media-sync-input" class="asset-file-input" type="file" multiple webkitdirectory /><span id="gallery-finalize-status" class="form-status" aria-live="polite">${escapeHtml(
+      finalizeReason,
+    )}</span></div><div class="gallery-summary-row"><span>${escapeHtml(
+      imageItems.length,
+    )} image variant${imageItems.length === 1 ? "" : "s"}</span><span>${escapeHtml(
+      gallery.selected_image_count || 0,
+    )} selected</span><span>${escapeHtml(videoItems.length)} completed video${
+      videoItems.length === 1 ? "" : "s"
+    }</span></div><div class="gallery-section"><div class="section-title-row"><h3>Images</h3><span class="form-status">${escapeHtml(
+      imageItems.length,
+    )}</span></div><div class="gallery-media-list">${imageRows}</div></div><div class="gallery-section"><div class="section-title-row"><h3>Videos</h3><span class="form-status">${escapeHtml(
+      videoItems.length,
+    )}</span></div><div class="gallery-media-list">${videoRows}</div></div></section>`;
   }
 
   function renderImageGenerationManager() {
@@ -911,6 +1022,15 @@
       return;
     }
 
+    if (view.id === "gallery") {
+      content.innerHTML = [
+        renderProjectGallery(current.activeProject),
+        renderMetricGrid(view.id, counts),
+        renderProjectFacts(current.activeProject, current.domainState),
+      ].join("");
+      return;
+    }
+
     content.innerHTML = [
       renderMetricGrid(view.id, counts),
       renderProjectFacts(current.activeProject, current.domainState),
@@ -933,6 +1053,7 @@
       ["Assets", counts.assets],
       ["Blocked", counts.blocked],
       ["Queue", counts.videoJobs],
+      ["Flow context", activeProject?.flow_context?.status || "disconnected"],
       ["Schema", `v${current.domainState?.schema_version || "?"}`],
       ["Updated", stateApi.formatDate(current.domainState?.meta?.updated_at)],
     ];
@@ -988,6 +1109,15 @@
 
   function setVideoQueueStatus(message, tone) {
     const status = stateApi.$("#video-queue-status");
+    if (!status) return;
+    status.textContent = message || "";
+    status.classList.toggle("success", tone === "success");
+    status.classList.toggle("danger", tone === "danger");
+    status.classList.toggle("warning", tone === "warning");
+  }
+
+  function setGalleryStatus(message, tone) {
+    const status = stateApi.$("#gallery-finalize-status");
     if (!status) return;
     status.textContent = message || "";
     status.classList.toggle("success", tone === "success");
@@ -1159,6 +1289,72 @@
         setImportStatus(error.message || "Reference resolution failed.", "danger");
       } finally {
         button.disabled = false;
+      }
+    });
+
+    stateApi.$("#workspace-content")?.addEventListener("click", (event) => {
+      const button = event.target?.closest?.(".gallery-jump-button[data-view]");
+      if (!button) return;
+
+      stateApi.setActiveView(button.dataset.view);
+      renderAll();
+      stateApi.$("#studio-workspace")?.focus();
+    });
+
+    stateApi.$("#workspace-content")?.addEventListener("click", async (event) => {
+      const button = event.target?.closest?.("#btn-finalize-selected-images");
+      if (!button) return;
+
+      try {
+        button.disabled = true;
+        const result = await stateApi.finalizeSelectedImages();
+        renderAll();
+        const issueCount =
+          Number(result.failed?.length || 0) +
+          Number(result.blocked?.length || 0) +
+          Number(result.missing_selection_count || 0);
+        setGalleryStatus(
+          `Finalized ${result.downloaded.length} selected image${
+            result.downloaded.length === 1 ? "" : "s"
+          }${issueCount ? `; ${issueCount} need attention` : ""}`,
+          issueCount ? "warning" : "success",
+        );
+      } catch (error) {
+        setGalleryStatus(error.message || "Selected image finalization failed.", "danger");
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    stateApi.$("#workspace-content")?.addEventListener("click", (event) => {
+      const button = event.target?.closest?.("#btn-sync-project-media");
+      if (!button) return;
+      stateApi.$("#project-media-sync-input")?.click();
+    });
+
+    stateApi.$("#workspace-content")?.addEventListener("change", async (event) => {
+      if (event.target?.id !== "project-media-sync-input") return;
+      const input = event.target;
+      const files = input.files;
+      if (!files || !files.length) return;
+
+      try {
+        input.disabled = true;
+        const result = await stateApi.syncProjectMediaFromFiles(files);
+        renderAll();
+        setGalleryStatus(
+          `Synced ${result.variant_matches} image variant${
+            result.variant_matches === 1 ? "" : "s"
+          }, ${result.video_matches} video output${result.video_matches === 1 ? "" : "s"}${
+            result.unresolved_variants ? `; ${result.unresolved_variants} unresolved` : ""
+          }`,
+          result.unresolved_variants ? "warning" : "success",
+        );
+      } catch (error) {
+        setGalleryStatus(error.message || "Project media sync failed.", "danger");
+      } finally {
+        input.disabled = false;
+        input.value = "";
       }
     });
 
@@ -1415,6 +1611,23 @@
       } catch (error) {
         renderAll();
         setVideoQueueStatus(error.message || "Video run failed.", "danger");
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    stateApi.$("#workspace-content")?.addEventListener("click", async (event) => {
+      const button = event.target?.closest?.(".video-repair-button[data-job-id]");
+      if (!button) return;
+
+      try {
+        button.disabled = true;
+        const job = await stateApi.repairVideoJobStartFrame(button.dataset.jobId);
+        renderAll();
+        setVideoQueueStatus(`Start frame repaired: ${job.expected_output_file_name || "video"}`, "success");
+      } catch (error) {
+        renderAll();
+        setVideoQueueStatus(error.message || "Start frame repair failed.", "danger");
       } finally {
         button.disabled = false;
       }

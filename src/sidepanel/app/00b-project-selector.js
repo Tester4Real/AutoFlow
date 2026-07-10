@@ -121,6 +121,9 @@
         alert = job.error_message || "Video job failed; retry from Project Studio.";
       }
     });
+    if (!alert && jobs.length && !project.current_flow_context_id) {
+      alert = "Disconnected: open the current Flow project before repairing or retrying media.";
+    }
 
     return {
       alert,
