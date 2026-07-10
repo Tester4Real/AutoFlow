@@ -1,0 +1,56 @@
+{
+  "background": {
+    "service_worker": "src/background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "js": [
+        "src/content/page-fetch-interceptor.js"
+      ],
+      "matches": [
+        "https://labs.google/fx/*/tools/flow*",
+        "https://labs.google/fx/tools/flow*"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "js": [
+        "src/content/flow-page-bridge.js"
+      ],
+      "matches": [
+        "https://labs.google/fx/*/tools/flow*",
+        "https://labs.google/fx/tools/flow*"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    }
+  ],
+  "description": "Google Flow personal automation build with direct connection responder fix.",
+  "host_permissions": [
+    "https://labs.google/*"
+  ],
+  "icons": {
+    "128": "assets/icons/icon128.png",
+    "16": "assets/icons/icon16.png",
+    "32": "assets/icons/icon32.png",
+    "48": "assets/icons/icon48.png"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3EBenyEvHnjvqHGIacbrIDrV8eev2zOAanOI4KALb2RuVOkWeQOqbY+1Az9D40FY83w4txUN+hV41msJnkHqHSlcY4WJDjpW/2oYlsTTrm6gqC+P5XJuzGadgG4bEQUnm31BAAOeTN8xs0t8dZm3zcv9Q4CCcK7I4PYZuHhy8ZGwpYrgoC3NNYEYrq8vxh6Z01f0Mi/+tcGxrM3VszCqOoaZZq/yD1O+5ri3TXc328W7YYLVzUtsTbiprtJ/jDxqKvS8uTZnsXLhYYCZcUNT9AzSeXuOQJmXfam0rf0vRhc3xy9ZmITv0cDuN9I4hUMjpkfR7n7r7EwaGX4nVqqFDwIDAQAB",
+  "manifest_version": 3,
+  "name": "TurboFlow - Auto Veo & Nano Banana Pro on Google Flow",
+  "permissions": [
+    "identity",
+    "sidePanel",
+    "scripting",
+    "storage",
+    "tabs",
+    "unlimitedStorage",
+    "downloads",
+    "activeTab"
+  ],
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  },
+  "version": "2.2.21"
+}

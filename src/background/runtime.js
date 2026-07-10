@@ -1,0 +1,11 @@
+﻿importScripts(
+  "../shared/project-domain/00-project-domain.js",
+  "../shared/project-domain/01-project-json-contract.js",
+  "runtime/00-state-connection.js",
+  "runtime/01-flow-api.js",
+  "runtime/02a-generation-common.js",
+  "runtime/02b-image-generation.js",
+  "runtime/02c-video-generation.js",
+  "runtime/03-downloads-cache.js",
+  "runtime/04-message-router.js",
+);

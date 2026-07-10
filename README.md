@@ -1,0 +1,53 @@
+# TurboFlow
+
+TurboFlow is a Chrome MV3 extension for batch image and video generation on Google Flow. It runs from the side panel, uses the current Google Flow browser session, queues prompts, tracks generated media, and can download results automatically.
+
+## Install
+
+1. Open `chrome://extensions`.
+2. Remove any old TurboFlow build.
+3. Enable Developer mode.
+4. Click "Load unpacked".
+5. Select this `TurboFlow` folder.
+6. Refresh the Google Flow tab and reopen the side panel.
+
+## File Map
+
+```text
+manifest.json
+src/
+  background/
+    service-worker.js       Chrome service worker entry point
+    runtime.js              Tiny loader for runtime/*.js
+    runtime/                Background runtime shards
+  content/
+    page-fetch-interceptor.js  MAIN-world fetch interceptor for Google Flow API calls
+    flow-page-bridge.js        ISOLATED-world bridge between page events and background
+  sidepanel/
+    index.html              Side panel markup
+    sidepanel.css           Tiny loader for styles/*.css
+    sidepanel.js            Breadcrumb only; index.html loads app/*.js
+    app/                    Side panel JavaScript shards
+    styles/                 Side panel CSS shards
+assets/
+  icons/                    Extension icons
+docs/
+  architecture.md           How the extension pieces communicate
+  code-map.md               Which shard to edit for each feature
+  research-notes.md         Refactor source notes and architecture decisions
+  connection-fix-*.md       Historical connection-fix audits
+```
+
+Start future edits with [`docs/code-map.md`](docs/code-map.md), then open only the shard for the feature you are changing.
+
+## Prompt Index JSON
+
+Use the JSON import button beside the text import button to load a `prompt-index.json` array with `file_name`, `image_prompt`, and optional `animation_prompt` fields. TurboFlow queues an image batch that uses bundled `assets/reference/Jack.jpg` as the shared character reference and downloads to the exact JSON `.png` paths, then queues an 8 second start-frame video batch for entries with animation prompts and saves the videos as matching `.mp4` files in the same folder.
+
+## Switching Accounts
+
+Use the Queue tab's Account button to open Google's account chooser without clearing local batches. After choosing the account, open a Flow project in that account, click Sync Folder if the Gallery or progress looks stale, then use Retry Failed. TurboFlow checks Chrome downloads and can scan the downloaded `media` folder to repair progress/thumbnails; for animation retries it uploads the still images to the current account/project and rewires failed clip prompts to those new start-frame media IDs.
+
+## Version
+
+Current manifest version: `2.2.21`.

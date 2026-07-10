@@ -1,0 +1,8 @@
+.DS_Store
+Thumbs.db
+*.crx
+*.zip
+2.2.8_0/
+.agents/
+.serena/
+.tokensave/
