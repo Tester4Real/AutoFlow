@@ -7,8 +7,10 @@
   const SCHEMA_VERSION = 1;
   const DEFAULT_PROJECT_NAME = "Untitled Project";
   const ID_PREFIX = "project";
+  const MUTATION_LOCK_NAME = `${STORAGE_KEY}:mutation`;
 
   let storageAdapter = null;
+  let localMutationQueue = Promise.resolve();
 
   function nowIso() {
     return new Date().toISOString();
@@ -22,9 +24,96 @@
     return JSON.parse(JSON.stringify(value));
   }
 
+  function repairTextEncoding(value) {
+    let text = String(value == null ? "" : value);
+    if (!/[\u00c2\u00c3\u00e2\u00f0\u00ef]/.test(text)) return text;
+
+    const cp1252Bytes = {
+      0x20ac: 0x80,
+      0x201a: 0x82,
+      0x0192: 0x83,
+      0x201e: 0x84,
+      0x2026: 0x85,
+      0x2020: 0x86,
+      0x2021: 0x87,
+      0x02c6: 0x88,
+      0x2030: 0x89,
+      0x0160: 0x8a,
+      0x2039: 0x8b,
+      0x0152: 0x8c,
+      0x017d: 0x8e,
+      0x2018: 0x91,
+      0x2019: 0x92,
+      0x201c: 0x93,
+      0x201d: 0x94,
+      0x2022: 0x95,
+      0x2013: 0x96,
+      0x2014: 0x97,
+      0x02dc: 0x98,
+      0x2122: 0x99,
+      0x0161: 0x9a,
+      0x203a: 0x9b,
+      0x0153: 0x9c,
+      0x017e: 0x9e,
+      0x0178: 0x9f,
+    };
+
+    function decodeSegment(segment) {
+      const bytes = [];
+      for (const character of segment) {
+        const codePoint = character.codePointAt(0);
+        if (codePoint <= 0xff) {
+          bytes.push(codePoint);
+        } else if (Object.prototype.hasOwnProperty.call(cp1252Bytes, codePoint)) {
+          bytes.push(cp1252Bytes[codePoint]);
+        } else {
+          return segment;
+        }
+      }
+      try {
+        return new TextDecoder("utf-8", { fatal: true }).decode(
+          new Uint8Array(bytes),
+        );
+      } catch (_error) {
+        return segment;
+      }
+    }
+
+    const encodedByte =
+      "[\\u0080-\\u00ff\\u0152\\u0153\\u0160\\u0161\\u0178\\u017d\\u017e" +
+      "\\u0192\\u02c6\\u02dc\\u2010-\\u203a\\u20ac\\u2122]";
+    const sequencePattern = new RegExp(
+      `\\u00f0${encodedByte}{3}|[\\u00e2\\u00ef]${encodedByte}{2}|[\\u00c2\\u00c3]${encodedByte}`,
+      "g",
+    );
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const decoded = text.replace(sequencePattern, decodeSegment);
+      if (decoded === text) break;
+      text = decoded;
+    }
+    return text;
+  }
+
   function safeDisplayName(value) {
     const name = String(value || "").trim();
     return name || DEFAULT_PROJECT_NAME;
+  }
+
+  function nextDefaultProjectName(projects) {
+    const list = Array.isArray(projects) ? projects : [];
+    const usedNames = new Set(
+      list.map((project) => safeDisplayName(project?.display_name).toLowerCase()),
+    );
+    let number = Math.max(1, list.length + 1);
+    let candidate =
+      number === 1 ? DEFAULT_PROJECT_NAME : `${DEFAULT_PROJECT_NAME} ${number}`;
+
+    while (usedNames.has(candidate.toLowerCase())) {
+      number += 1;
+      candidate = `${DEFAULT_PROJECT_NAME} ${number}`;
+    }
+
+    return candidate;
   }
 
   function createId(prefix) {
@@ -144,12 +233,40 @@
           typeof existingMeta.created_at === "string" && existingMeta.created_at
             ? existingMeta.created_at
             : timestamp,
-        updated_at: timestamp,
+        updated_at:
+          typeof existingMeta.updated_at === "string" && existingMeta.updated_at
+            ? existingMeta.updated_at
+            : timestamp,
         warnings: previousWarnings.concat(warnings),
       }),
       active_project_id: activeProjectId || null,
       projects,
     });
+  }
+
+  function needsStateRepair(input) {
+    if (
+      !isObject(input) ||
+      !Array.isArray(input.projects) ||
+      Number(input.schema_version) !== SCHEMA_VERSION ||
+      !isObject(input.meta)
+    ) {
+      return true;
+    }
+
+    const projectIds = new Set();
+    for (const project of input.projects) {
+      const projectId = isObject(project)
+        ? String(project.project_id || project.projectId || "").trim()
+        : "";
+      if (!projectId || projectIds.has(projectId)) return true;
+      projectIds.add(projectId);
+    }
+
+    const activeProjectId = String(
+      input.active_project_id || input.activeProjectId || "",
+    ).trim();
+    return !!activeProjectId && !projectIds.has(activeProjectId);
   }
 
   function getStorageArea() {
@@ -162,6 +279,20 @@
       return root.chrome.storage.local;
     }
     return null;
+  }
+
+  function withMutationLock(task) {
+    const lockManager = root.navigator?.locks;
+    if (lockManager && typeof lockManager.request === "function") {
+      return lockManager.request(MUTATION_LOCK_NAME, () => task());
+    }
+
+    const result = localMutationQueue.then(task, task);
+    localMutationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 
   function chromeLastError() {
@@ -220,132 +351,210 @@
     });
   }
 
-  async function save(state) {
+  async function saveUnlocked(state) {
     const normalized = normalizeState(state);
     normalized.meta.updated_at = nowIso();
     await storageSet({ [STORAGE_KEY]: normalized });
     return clone(normalized);
   }
 
-  async function load() {
+  function save(state) {
+    return withMutationLock(() => saveUnlocked(state));
+  }
+
+  async function readState() {
     const items = await storageGet(STORAGE_KEY);
-    const state = normalizeState(items[STORAGE_KEY]);
-    await save(state);
-    return clone(state);
+    const raw = items[STORAGE_KEY];
+    return { raw, state: normalizeState(raw) };
   }
 
-  async function createProject(input) {
-    const state = await load();
-    const timestamp = nowIso();
-    const source = isObject(input) ? input : {};
-    const project = normalizeProject(
-      Object.assign({}, source, {
-        project_id: createId(ID_PREFIX),
-        display_name: safeDisplayName(
-          source.display_name || source.displayName || source.name,
-        ),
-        created_at: timestamp,
-        updated_at: timestamp,
-      }),
-      [],
-      new Set(state.projects.map((item) => item.project_id)),
-    );
-
-    state.projects.push(project);
-    if (!state.active_project_id) {
-      state.active_project_id = project.project_id;
+  async function load() {
+    const snapshot = await readState();
+    if (!needsStateRepair(snapshot.raw)) {
+      return clone(snapshot.state);
     }
 
-    const savedState = await save(state);
-    return { ok: true, project: clone(project), state: savedState };
+    return withMutationLock(async () => {
+      const latest = await readState();
+      if (!needsStateRepair(latest.raw)) {
+        return clone(latest.state);
+      }
+      return saveUnlocked(latest.state);
+    });
   }
 
-  async function updateProject(projectId, updates) {
-    const state = await load();
-    const id = String(projectId || "").trim();
-    const project = state.projects.find((item) => item.project_id === id);
+  function createProject(input = {}) {
+    return withMutationLock(async () => {
+      const { state } = await readState();
+      const timestamp = nowIso();
+      const source = isObject(input) ? input : {};
+      const requestedName = String(
+        source.display_name || source.displayName || source.name || "",
+      ).trim();
+      const project = normalizeProject(
+        Object.assign({}, source, {
+          project_id: createId(ID_PREFIX),
+          display_name: requestedName
+            ? safeDisplayName(requestedName)
+            : nextDefaultProjectName(state.projects),
+          created_at: timestamp,
+          updated_at: timestamp,
+        }),
+        [],
+        new Set(state.projects.map((item) => item.project_id)),
+      );
 
-    if (!project) {
-      return {
-        ok: false,
-        error: {
-          code: "PROJECT_NOT_FOUND",
-          message: `Project not found: ${id || "(empty id)"}`,
-        },
-        state,
-      };
-    }
+      state.projects.push(project);
+      if (!state.active_project_id) {
+        state.active_project_id = project.project_id;
+      }
 
-    const patch = isObject(updates) ? updates : {};
-    if (Object.prototype.hasOwnProperty.call(patch, "display_name")) {
-      project.display_name = safeDisplayName(patch.display_name);
-    }
-    if (isObject(patch.settings)) {
-      project.settings = Object.assign({}, project.settings, patch.settings);
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, "current_flow_context_id")) {
-      project.current_flow_context_id = String(patch.current_flow_context_id || "").trim();
-    }
-    if (isObject(patch.flow_context)) {
-      project.flow_context = clone(patch.flow_context);
-    }
-    if (Array.isArray(patch.assets)) {
-      project.assets = patch.assets.filter(isObject).map(clone);
-    }
-    if (Array.isArray(patch.prompt_records)) {
-      project.prompt_records = patch.prompt_records.filter(isObject).map(clone);
-    }
-    if (Array.isArray(patch.prompt_imports)) {
-      project.prompt_imports = patch.prompt_imports.filter(isObject).map(clone);
-    }
-    if (Array.isArray(patch.image_generation_runs)) {
-      project.image_generation_runs = patch.image_generation_runs.filter(isObject).map(clone);
-    }
-    if (Array.isArray(patch.image_variants)) {
-      project.image_variants = patch.image_variants.filter(isObject).map(clone);
-    }
-    if (Array.isArray(patch.video_jobs)) {
-      project.video_jobs = patch.video_jobs.filter(isObject).map(clone);
-    }
-    project.updated_at = nowIso();
-
-    const savedState = await save(state);
-    return { ok: true, project: clone(project), state: savedState };
+      const savedState = await saveUnlocked(state);
+      return { ok: true, project: clone(project), state: savedState };
+    });
   }
 
-  async function setActiveProject(projectId) {
-    const state = await load();
-    const id = String(projectId || "").trim();
-    const exists = state.projects.some((project) => project.project_id === id);
+  function updateProject(projectId, updates) {
+    return withMutationLock(async () => {
+      const { state } = await readState();
+      const id = String(projectId || "").trim();
+      const project = state.projects.find((item) => item.project_id === id);
 
-    if (!exists) {
-      return {
-        ok: false,
-        error: {
-          code: "PROJECT_NOT_FOUND",
-          message: `Project not found: ${id || "(empty id)"}`,
-        },
-        state,
-      };
-    }
+      if (!project) {
+        return {
+          ok: false,
+          error: {
+            code: "PROJECT_NOT_FOUND",
+            message: `Project not found: ${id || "(empty id)"}`,
+          },
+          state,
+        };
+      }
 
-    state.active_project_id = id;
-    const savedState = await save(state);
-    return { ok: true, active_project_id: id, state: savedState };
+      const patch = isObject(updates) ? updates : {};
+      if (Object.prototype.hasOwnProperty.call(patch, "display_name")) {
+        project.display_name = safeDisplayName(patch.display_name);
+      }
+      if (isObject(patch.settings)) {
+        project.settings = Object.assign({}, project.settings, patch.settings);
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, "current_flow_context_id")) {
+        project.current_flow_context_id = String(
+          patch.current_flow_context_id || "",
+        ).trim();
+      }
+      if (isObject(patch.flow_context)) {
+        project.flow_context = clone(patch.flow_context);
+      }
+      if (Array.isArray(patch.assets)) {
+        project.assets = patch.assets.filter(isObject).map(clone);
+      }
+      if (Array.isArray(patch.prompt_records)) {
+        project.prompt_records = patch.prompt_records.filter(isObject).map(clone);
+      }
+      if (Array.isArray(patch.prompt_imports)) {
+        project.prompt_imports = patch.prompt_imports.filter(isObject).map(clone);
+      }
+      if (Array.isArray(patch.image_generation_runs)) {
+        project.image_generation_runs = patch.image_generation_runs.filter(isObject).map(clone);
+      }
+      if (Array.isArray(patch.image_variants)) {
+        project.image_variants = patch.image_variants.filter(isObject).map(clone);
+      }
+      if (Array.isArray(patch.video_jobs)) {
+        project.video_jobs = patch.video_jobs.filter(isObject).map(clone);
+      }
+      project.updated_at = nowIso();
+
+      const savedState = await saveUnlocked(state);
+      return { ok: true, project: clone(project), state: savedState };
+    });
+  }
+
+  function appendPromptImport(projectId, promptRecords, importRecord) {
+    return withMutationLock(async () => {
+      const { state } = await readState();
+      const id = String(projectId || "").trim();
+      const project = state.projects.find((item) => item.project_id === id);
+
+      if (!project) {
+        return {
+          ok: false,
+          error: {
+            code: "PROJECT_NOT_FOUND",
+            message: `Project not found: ${id || "(empty id)"}`,
+          },
+          state,
+        };
+      }
+
+      const records = Array.isArray(promptRecords)
+        ? promptRecords.filter(isObject).map(clone)
+        : [];
+      if (!isObject(importRecord)) {
+        return {
+          ok: false,
+          error: {
+            code: "INVALID_PROMPT_IMPORT",
+            message: "Prompt import record is required.",
+          },
+          state,
+        };
+      }
+
+      const existingRecords = Array.isArray(project.prompt_records)
+        ? project.prompt_records.filter(isObject)
+        : [];
+      const existingImports = Array.isArray(project.prompt_imports)
+        ? project.prompt_imports.filter(isObject)
+        : [];
+      project.prompt_records = existingRecords.concat(records);
+      project.prompt_imports = existingImports.concat(clone(importRecord));
+      project.updated_at = nowIso();
+
+      const savedState = await saveUnlocked(state);
+      return { ok: true, project: clone(project), state: savedState };
+    });
+  }
+
+  function setActiveProject(projectId) {
+    return withMutationLock(async () => {
+      const { state } = await readState();
+      const id = String(projectId || "").trim();
+      const exists = state.projects.some((project) => project.project_id === id);
+
+      if (!exists) {
+        return {
+          ok: false,
+          error: {
+            code: "PROJECT_NOT_FOUND",
+            message: `Project not found: ${id || "(empty id)"}`,
+          },
+          state,
+        };
+      }
+
+      state.active_project_id = id;
+      const savedState = await saveUnlocked(state);
+      return { ok: true, active_project_id: id, state: savedState };
+    });
   }
 
   root.TFProjectDomain = Object.freeze({
     STORAGE_KEY,
     SCHEMA_VERSION,
+    appendPromptImport,
     createId,
     createProject,
     emptyState,
     load,
     normalizeState,
+    repairTextEncoding,
     save,
     setActiveProject,
     setStorageAdapter(adapter) {
       storageAdapter = adapter || null;
+      localMutationQueue = Promise.resolve();
     },
     updateProject,
   });

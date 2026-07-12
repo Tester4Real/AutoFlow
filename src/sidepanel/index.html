@@ -49,7 +49,7 @@
               ><span>Queue management</span>
             </div>
           </div>
-          <button id="btn-google-signin" class="btn-google-signin">
+          <button class="btn-google-signin" style="display: none">
             <svg width="18" height="18" viewBox="0 0 48 48">
               <path
                 fill="#EA4335"
@@ -93,22 +93,19 @@
               id="btn-open-project-studio"
               class="status-action-btn project-studio-link"
               type="button"
-              title="Open Project Studio"
+              title="Open Channel Studio"
             >
               <span class="material-symbols-outlined">account_tree</span>
               Studio
             </button>
-            <div
-              id="speed-mode-badge"
-              class="speed-mode-badge"
-              style="display: none"
-            >
-              <span class="material-symbols-outlined" id="speed-mode-badge-icon"
-                >balance</span
-              ><span class="speed-mode-badge-text" id="speed-mode-badge-text"
-                >Balanced</span
-              >
-            </div>
+            <label class="speed-select-wrap" title="Generation speed">
+              <span class="material-symbols-outlined">speed</span>
+              <select id="speed-select" class="speed-select" aria-label="Speed">
+                <option value="fast">Fast</option>
+                <option value="balanced">Balanced</option>
+                <option value="slow">Slow</option>
+              </select>
+            </label>
             <div class="status-wrapper" id="status-wrapper">
               <div id="status-badge" class="badge badge-disconnected">
                 Disconnected
@@ -123,7 +120,7 @@
                   >
                 </div>
                 <div class="status-check-row">
-                  <span>Project Open</span
+              <span>Flow Project Open</span
                   ><span
                     class="material-symbols-outlined status-check-icon"
                     id="sc-project"
@@ -139,33 +136,37 @@
                   <span class="material-symbols-outlined">refresh</span>
                   Re-check
                 </button>
+                <button id="btn-fix-unusual" class="status-action-btn">
+                  <span class="material-symbols-outlined">cleaning_services</span>
+                  Fix Unusual Activity
+                </button>
               </div>
             </div>
           </div>
         </div>
-        <section class="project-strip" aria-label="Active Project">
+        <section class="project-strip" aria-label="Active YouTube Channel">
           <div class="project-strip-head">
             <label class="project-strip-label" for="sidepanel-project-picker">
-              Project
+              YouTube Channel
             </label>
             <span id="sidepanel-project-status" class="project-strip-status">
-              Loading Project
+              Loading Channel
             </span>
           </div>
           <div class="project-strip-row">
             <select
               id="sidepanel-project-picker"
               class="project-strip-select"
-              aria-label="Active Project"
+              aria-label="Active YouTube Channel"
             >
-              <option value="">Loading projects</option>
+              <option value="">Loading channels</option>
             </select>
             <button
               id="btn-create-sidepanel-project"
               class="project-strip-action"
               type="button"
-              title="Create Project"
-              aria-label="Create Project"
+              title="Create Channel"
+              aria-label="Create Channel"
             >
             <span class="material-symbols-outlined">add</span>
           </button>
@@ -175,13 +176,13 @@
           class="project-queue-summary"
           aria-live="polite"
         >
-          <span class="project-queue-chip muted">Queue: no project work</span>
+          <span class="project-queue-chip muted">Queue: no channel work</span>
         </div>
         <button
           id="btn-open-project-video-queue"
           class="project-strip-video-link"
           type="button"
-          title="Open Project Studio Video Queue"
+          title="Open Channel Studio Video Queue"
         >
           <span class="material-symbols-outlined">queue_play_next</span>
           Video Queue
@@ -222,24 +223,149 @@
           <button id="btn-sign-out" style="display: none"></button>
         </div>
         <div class="tabs">
-          <button class="tab active" data-tab="control">
-            <span class="material-symbols-outlined">tune</span>
-            Control</button
+          <button class="tab active" data-tab="generate">
+            <span class="material-symbols-outlined">auto_awesome</span>
+            Generate</button
           ><button class="tab" data-tab="queue">
             <span class="material-symbols-outlined">queue</span>
-            Queue</button
-          ><button class="tab" data-tab="gallery">
-            <span class="material-symbols-outlined">grid_view</span>
-            Gallery</button
-          ><button class="tab" data-tab="library">
-            <span class="material-symbols-outlined">photo_library</span>
-            Library</button
-          ><button class="tab" data-tab="logs">
-            <span class="material-symbols-outlined">terminal</span>
-            Logs
+            Queue
           </button>
         </div>
-        <div id="tab-control" class="tab-content active">
+        <div id="tab-generate" class="tab-content active">
+          <div class="generate-body">
+            <section id="generate-json-entry" class="json-entry">
+              <div class="json-entry-main">
+                <span class="material-symbols-outlined">data_object</span>
+                <div>
+                  <div class="json-entry-title">Channel JSON</div>
+                  <div id="generate-json-entry-status" class="json-entry-status">
+                    Select a channel to import.
+                  </div>
+                </div>
+              </div>
+              <button
+                id="btn-import-json-generate"
+                class="btn-flow-primary"
+                type="button"
+              >
+                <span class="material-symbols-outlined">upload_file</span>
+                Import JSON
+              </button>
+            </section>
+
+            <section
+              id="generate-json-summary"
+              class="json-summary"
+              style="display: none"
+              aria-live="polite"
+            >
+              <div class="json-summary-head">
+                <div>
+                  <div id="generate-json-name" class="json-summary-title">
+                    prompt-index.json
+                  </div>
+                  <div id="generate-json-meta" class="json-summary-meta">
+                    0 prompts
+                  </div>
+                </div>
+                <button
+                  id="btn-replace-json"
+                  class="btn-flow-secondary btn-sm"
+                  type="button"
+                >
+                  <span class="material-symbols-outlined">sync</span>
+                  Replace
+                </button>
+              </div>
+              <div id="generate-json-stats" class="json-summary-stats"></div>
+              <div
+                id="generate-blocked-row"
+                class="blocked-row"
+                style="display: none"
+              >
+                <span id="generate-blocked-text">0 blocked</span>
+                <button
+                  id="btn-open-studio-blocked"
+                  class="btn-flow-secondary btn-sm"
+                  type="button"
+                >
+                  <span class="material-symbols-outlined">account_tree</span>
+                  Studio
+                </button>
+              </div>
+            </section>
+
+            <section
+              id="generate-form"
+              class="generate-form"
+              style="display: none"
+            >
+              <label class="generate-field">
+                <span>Model</span>
+                <select id="generate-image-model" class="flow-select">
+                  <option value="GEM_PIX_2">Nano Banana Pro</option>
+                  <option value="NARWHAL">Nano Banana 2</option>
+                </select>
+              </label>
+              <div class="generate-control-row">
+                <label class="compact-field">
+                  <span>Ratio</span>
+                  <select id="ratio-select" class="flow-select">
+                    <option value="IMAGE_ASPECT_RATIO_LANDSCAPE">16:9</option>
+                    <option value="IMAGE_ASPECT_RATIO_LANDSCAPE_FOUR_THREE">
+                      4:3
+                    </option>
+                    <option value="IMAGE_ASPECT_RATIO_SQUARE">1:1</option>
+                    <option value="IMAGE_ASPECT_RATIO_PORTRAIT_THREE_FOUR">
+                      3:4
+                    </option>
+                    <option value="IMAGE_ASPECT_RATIO_PORTRAIT">9:16</option>
+                  </select>
+                </label>
+                <div class="compact-field">
+                  <span>Variants</span>
+                  <div class="variants-stepper">
+                    <button
+                      id="variants-minus"
+                      class="btn-flow-icon"
+                      type="button"
+                      title="Decrease variants"
+                    >
+                      <span class="material-symbols-outlined">remove</span>
+                    </button>
+                    <span id="variants-value">2</span>
+                    <button
+                      id="variants-plus"
+                      class="btn-flow-icon"
+                      type="button"
+                      title="Increase variants"
+                    >
+                      <span class="material-symbols-outlined">add</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <div
+              id="generate-actions"
+              class="generate-actions"
+              style="display: none"
+            >
+              <button
+                id="btn-add-to-queue"
+                class="btn-flow-secondary"
+                type="button"
+              >
+                <span class="material-symbols-outlined">playlist_add</span>
+                Add to Queue
+              </button>
+              <button id="btn-generate" class="btn-flow-primary" type="button">
+                <span class="material-symbols-outlined">play_arrow</span>
+                Generate
+              </button>
+            </div>
+          </div>
           <div class="section">
             <label class="section-label">Video name / folder</label>
             <input
@@ -876,7 +1002,7 @@
               <span class="material-symbols-outlined">school</span>
               Restart Tour</button
             ><button
-              id="btn-fix-unusual"
+              id="btn-fix-unusual-legacy"
               class="btn-flow-secondary btn-sm"
               title="Open Chrome's clear data page to fix the 'unusual activity' error"
             >
@@ -1840,6 +1966,7 @@
       </div>
     <script src="../shared/project-domain/00-project-domain.js"></script>
     <script src="../shared/project-domain/01-project-json-contract.js"></script>
+    <script src="../shared/project-domain/02-project-prompt-import.js"></script>
     <script src="app/00-state-storage.js"></script>
       <script src="app/00a-project-studio-link.js"></script>
       <script src="app/00b-project-selector.js"></script>
@@ -1858,6 +1985,7 @@
       <script src="app/06b-control-runner.js"></script>
       <script src="app/06c-settings-events.js"></script>
       <script src="app/07-runtime-boot.js"></script>
+      <script src="app/08-generate-surface.js"></script>
     </div>
   </body>
 </html>

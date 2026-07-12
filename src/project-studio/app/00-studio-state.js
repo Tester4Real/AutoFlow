@@ -6,17 +6,17 @@
   const VIEWS = [
     {
       id: "project",
-      label: "Project",
+      label: "Channel",
       icon: "tune",
-      title: "Project Settings",
-      subtitle: "Identity and storage metadata",
+      title: "Channel Settings",
+      subtitle: "YouTube channel identity and storage",
     },
     {
       id: "assets",
       label: "Assets",
       icon: "folder_managed",
       title: "Assets",
-      subtitle: "Characters, places, and reference files",
+      subtitle: "Stored reference files",
     },
     {
       id: "import",
@@ -46,13 +46,19 @@
       title: "Gallery",
       subtitle: "Outputs and downloads",
     },
+    {
+      id: "logs",
+      label: "Logs",
+      icon: "receipt_long",
+      title: "Logs",
+      subtitle: "Recent activity and errors",
+    },
   ];
 
+  const LOG_STORAGE_KEY = "flowAutoLogs";
+  const LOG_LIMIT = 500;
+
   const ASSET_TYPES = Object.freeze([
-    { id: "character", label: "Character", icon: "person" },
-    { id: "place", label: "Place", icon: "location_on" },
-    { id: "prop", label: "Prop", icon: "category" },
-    { id: "style", label: "Style", icon: "palette" },
     { id: "reference", label: "Reference", icon: "image" },
   ]);
 
@@ -73,6 +79,7 @@
     flowContext: null,
     isLoading: false,
     lastError: null,
+    logs: [],
   };
 
   function $(selector) {
@@ -91,12 +98,16 @@
     return root.TFProjectDomain || null;
   }
 
+  function getStorageLocal() {
+    return root.chrome?.storage?.local || null;
+  }
+
   function getViewDefinition(viewId) {
     return VIEWS.find((view) => view.id === viewId) || VIEWS[0];
   }
 
   function getAssetTypeDefinition(type) {
-    return ASSET_TYPES.find((item) => item.id === type) || ASSET_TYPES[4];
+    return ASSET_TYPES.find((item) => item.id === type) || ASSET_TYPES[0];
   }
 
   function resolveActiveProject(domainState) {
@@ -145,16 +156,6 @@
     return name || "Untitled Asset";
   }
 
-  function parseAliases(value) {
-    if (Array.isArray(value)) {
-      return value.map((item) => String(item || "").trim()).filter(Boolean);
-    }
-    return String(value || "")
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-
   function createAssetId() {
     const domain = getDomain();
     if (domain && typeof domain.createId === "function") {
@@ -201,6 +202,85 @@
     return Array.isArray(project?.prompt_imports)
       ? project.prompt_imports.filter(isObject)
       : [];
+  }
+
+  function sceneTitleFromFileName(value) {
+    const fileName = String(value || "")
+      .replace(/\\/g, "/")
+      .split("/")
+      .pop()
+      .trim();
+    return fileName.replace(/\.[^.]+$/, "") || "Untitled scene";
+  }
+
+  function videoNameFromSource(value) {
+    const sourceName = String(value || "")
+      .replace(/\\/g, "/")
+      .split("/")
+      .pop()
+      .trim();
+    return sourceName.replace(/\.json$/i, "").trim() || "Untitled video";
+  }
+
+  function getProjectVideos(project) {
+    const imports = getProjectPromptImports(project);
+    const promptRecords = getProjectPromptRecords(project);
+    const knownImportIds = new Set(imports.map((item) => String(item.import_id || "")));
+    const videos = imports.map((item, index) => {
+      const videoId = String(item.import_id || `import-${index}`);
+      const records = promptRecords.filter(
+        (record) => String(record?.source?.import_id || "") === videoId,
+      );
+      return {
+        video_id: videoId,
+        display_name:
+          String(item.video_name || item.display_name || "").trim() ||
+          videoNameFromSource(item.source_name),
+        source_name: String(item.source_name || ""),
+        prompt_count: records.length,
+        selected_count: records.filter((record) => !!record.selected_variant_id).length,
+        animation_count: records.filter((record) => !!getPromptAnimationPrompt(record)).length,
+        imported_at: item.imported_at || "",
+        prompt_ids: records.map((record) => record.prompt_id).filter(Boolean),
+        is_legacy: false,
+      };
+    });
+    const legacyRecords = promptRecords.filter((record) => {
+      const importId = String(record?.source?.import_id || "");
+      return !importId || !knownImportIds.has(importId);
+    });
+    if (legacyRecords.length) {
+      videos.push({
+        video_id: "legacy",
+        display_name:
+          String(project?.settings?.legacy_video_name || "").trim() || "Imported video",
+        source_name: "",
+        prompt_count: legacyRecords.length,
+        selected_count: legacyRecords.filter((record) => !!record.selected_variant_id).length,
+        animation_count: legacyRecords.filter((record) => !!getPromptAnimationPrompt(record)).length,
+        imported_at: "",
+        prompt_ids: legacyRecords.map((record) => record.prompt_id).filter(Boolean),
+        is_legacy: true,
+      });
+    }
+    return videos;
+  }
+
+  function getVideoPromptRecords(project, videoId) {
+    const key = String(videoId || "").trim();
+    if (!key) return [];
+    if (key === "legacy") {
+      const knownImportIds = new Set(
+        getProjectPromptImports(project).map((item) => String(item.import_id || "")),
+      );
+      return getProjectPromptRecords(project).filter((record) => {
+        const importId = String(record?.source?.import_id || "");
+        return !importId || !knownImportIds.has(importId);
+      });
+    }
+    return getProjectPromptRecords(project).filter(
+      (record) => String(record?.source?.import_id || "") === key,
+    );
   }
 
   function createPromptId() {
@@ -255,6 +335,10 @@
     return root.TFProjectJsonContract || null;
   }
 
+  function getPromptImport() {
+    return root.TFProjectPromptImport || null;
+  }
+
   function getRawReferenceNames(record) {
     const contract = getContract();
     const fields = contract?.ACCEPTED_REFERENCE_FIELDS || [
@@ -289,6 +373,102 @@
       .replace(/^-+|-+$/g, "");
   }
 
+  function getLogCategory(entry) {
+    const category = String(entry?.category || "").trim().toLowerCase();
+    if (category === "error" || category === "activity") return category;
+    const type = String(entry?.type || "").trim().toLowerCase();
+    return type === "error" || type === "warn" ? "error" : "activity";
+  }
+
+  function normalizeLogEntry(entry, index) {
+    const createdAt = String(entry?.created_at || entry?.createdAt || "").trim();
+    const rawMessage = String(entry?.message || "");
+    const message = getDomain()?.repairTextEncoding?.(rawMessage) || rawMessage;
+    return {
+      id:
+        String(entry?.id || "").trim() ||
+        `${createdAt || "log"}_${index}_${message.slice(0, 12)}`,
+      message,
+      type: String(entry?.type || "info").trim().toLowerCase() || "info",
+      level: String(entry?.level || "user").trim().toLowerCase() || "user",
+      category: getLogCategory(entry),
+      time: String(entry?.time || "").trim(),
+      created_at: createdAt,
+    };
+  }
+
+  function readStoredLogs() {
+    const storage = getStorageLocal();
+    if (!storage || typeof storage.get !== "function") {
+      return Promise.resolve([]);
+    }
+
+    return new Promise((resolve) => {
+      try {
+        storage.get([LOG_STORAGE_KEY], (result) => {
+          if (root.chrome?.runtime?.lastError) {
+            resolve([]);
+            return;
+          }
+          const logs = Array.isArray(result?.[LOG_STORAGE_KEY]) ? result[LOG_STORAGE_KEY] : [];
+          resolve(logs.filter(isObject).map(normalizeLogEntry).slice(-LOG_LIMIT));
+        });
+      } catch (error) {
+        resolve([]);
+      }
+    });
+  }
+
+  function writeStoredLogs(logs) {
+    const storage = getStorageLocal();
+    if (!storage || typeof storage.set !== "function") {
+      return Promise.resolve();
+    }
+
+    const safeLogs = Array.isArray(logs) ? logs.filter(isObject).slice(-LOG_LIMIT) : [];
+    return new Promise((resolve) => {
+      try {
+        storage.set({ [LOG_STORAGE_KEY]: safeLogs }, () => resolve());
+      } catch (error) {
+        resolve();
+      }
+    });
+  }
+
+  async function refreshStudioLogs() {
+    studioState.logs = await readStoredLogs();
+    return studioState.logs;
+  }
+
+  async function clearStudioLogs() {
+    studioState.logs = [];
+    await writeStoredLogs([]);
+    return studioState.logs;
+  }
+
+  async function appendStudioLog(message, type) {
+    const timestamp = new Date().toISOString();
+    const entry = normalizeLogEntry(
+      {
+        id: `studio_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        message: String(message || ""),
+        type: type || "info",
+        level: "user",
+        time: new Date().toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }),
+        created_at: timestamp,
+      },
+      studioState.logs.length,
+    );
+    const logs = (await readStoredLogs()).concat(entry).slice(-LOG_LIMIT);
+    studioState.logs = logs;
+    await writeStoredLogs(logs);
+    return entry;
+  }
+
   function getLookupValues(value) {
     const clean = String(value || "").trim().toLowerCase();
     const slug = normalizeLookupValue(value);
@@ -297,11 +477,6 @@
 
   function getAssetLookupValues(asset) {
     const values = getLookupValues(asset?.display_name || asset?.displayName || asset?.name);
-    if (Array.isArray(asset?.aliases)) {
-      asset.aliases.forEach((alias) => {
-        getLookupValues(alias).forEach((value) => values.push(value));
-      });
-    }
     return Array.from(new Set(values));
   }
 
@@ -318,86 +493,22 @@
   function findReferenceCandidates(reference, assets) {
     const name = String(reference?.name || "").trim();
     const lookupValues = getLookupValues(name);
-    const expectedType = String(reference?.type || "").trim().toLowerCase();
 
     if (!lookupValues.length) return [];
 
     return assets.filter((asset) => {
       if (!isAssetActive(asset)) return false;
-      if (expectedType && asset.type !== expectedType) return false;
       const assetValues = getAssetLookupValues(asset);
       return lookupValues.some((lookup) => assetValues.indexOf(lookup) >= 0);
     });
   }
 
   function resolvePromptReference(reference, assets) {
-    const source = isObject(reference) ? reference : {};
-    const name = String(source.name || "").trim();
-    const required = source.required !== false;
-    const base = {
-      name,
-      type: String(source.type || "").trim().toLowerCase(),
-      required,
-    };
-    const manualAssetId = String(
-      source.manual_asset_id || (source.resolution_source === "manual" ? source.asset_id : ""),
-    ).trim();
-
-    if (manualAssetId) {
-      const manualAsset = getAssetById(assets, manualAssetId);
-      const active = isAssetActive(manualAsset);
-      const typeMatches = !base.type || manualAsset?.type === base.type;
-
-      if (manualAsset && active && typeMatches) {
-        return Object.assign({}, base, {
-          manual_asset_id: manualAsset.asset_id,
-          asset_id: manualAsset.asset_id,
-          asset_type: manualAsset.type || "",
-          asset_name: safeAssetName(
-            manualAsset.display_name || manualAsset.displayName || manualAsset.name,
-          ),
-          resolution_status: "resolved",
-          resolution_source: "manual",
-        });
-      }
-
-      return Object.assign({}, base, {
-        manual_asset_id: manualAssetId,
-        candidate_asset_ids: [],
-        resolution_status: "missing",
-        resolution_source: "manual",
-        resolution_error: manualAsset
-          ? active
-            ? "type_mismatch"
-            : "asset_disabled"
-          : "asset_not_found",
-      });
+    const api = getPromptImport();
+    if (!api || typeof api.resolvePromptReference !== "function") {
+      throw new Error("Channel prompt import API unavailable.");
     }
-
-    const candidates = findReferenceCandidates(source, assets);
-
-    if (candidates.length === 1) {
-      const asset = candidates[0];
-      return Object.assign({}, base, {
-        asset_id: asset.asset_id,
-        asset_type: asset.type || "",
-        asset_name: safeAssetName(asset.display_name || asset.displayName || asset.name),
-        resolution_status: "resolved",
-        resolution_source: "auto",
-      });
-    }
-
-    if (candidates.length > 1) {
-      return Object.assign({}, base, {
-        candidate_asset_ids: candidates.map((asset) => asset.asset_id).filter(Boolean),
-        resolution_status: "ambiguous",
-      });
-    }
-
-    return Object.assign({}, base, {
-      candidate_asset_ids: [],
-      resolution_status: "missing",
-    });
+    return api.resolvePromptReference(reference, assets);
   }
 
   function getBlockedReferences(references) {
@@ -458,57 +569,27 @@
   }
 
   function resolvePromptRecord(record, assets, timestamp) {
-    const references = Array.isArray(record?.references)
-      ? record.references.filter(isObject).map((reference) => resolvePromptReference(reference, assets))
-      : [];
-    const blockedReferences = getBlockedReferences(references);
-    const isBlocked = blockedReferences.length > 0;
-
-    const resolvedRecord = Object.assign({}, record, {
-      references,
-      blocked_references: blockedReferences,
-      reference_resolution: {
-        resolved_count: references.filter(
-          (reference) => reference.resolution_status === "resolved",
-        ).length,
-        blocked_count: blockedReferences.length,
-        unresolved_count: references.filter((reference) => {
-          return (
-            reference.resolution_status === "missing" ||
-            reference.resolution_status === "ambiguous"
-          );
-        }).length,
-        resolved_at: timestamp,
-      },
-      status: isBlocked ? "blocked" : "ready",
-      can_generate_images: !isBlocked,
-      updated_at: timestamp,
-    });
-
-    return getPromptResolutionSignature(record) === getPromptResolutionSignature(resolvedRecord)
-      ? record
-      : resolvedRecord;
+    const api = getPromptImport();
+    if (!api || typeof api.resolvePromptRecord !== "function") {
+      throw new Error("Channel prompt import API unavailable.");
+    }
+    return api.resolvePromptRecord(record, assets, timestamp);
   }
 
   function resolvePromptRecordsForProject(project, records) {
-    const timestamp = new Date().toISOString();
-    const assets = getProjectAssets(project);
-    return records.map((record) => resolvePromptRecord(record, assets, timestamp));
+    const api = getPromptImport();
+    if (!api || typeof api.resolvePromptRecordsForProject !== "function") {
+      throw new Error("Channel prompt import API unavailable.");
+    }
+    return api.resolvePromptRecordsForProject(project, records);
   }
 
   function summarizePromptResolution(records) {
-    const readyCount = records.filter((record) => record.status === "ready").length;
-    const blockedCount = records.filter((record) => record.status === "blocked").length;
-    const needsResolutionCount = records.filter(
-      (record) => record.status === "needs_resolution",
-    ).length;
-
-    return {
-      ready_count: readyCount,
-      blocked_count: blockedCount,
-      needs_resolution_count: needsResolutionCount,
-      record_count: records.length,
-    };
+    const api = getPromptImport();
+    if (!api || typeof api.summarizePromptResolution !== "function") {
+      throw new Error("Channel prompt import API unavailable.");
+    }
+    return api.summarizePromptResolution(records);
   }
 
   function getPromptDisabledReason(record) {
@@ -517,8 +598,7 @@
       return blocked
         .map((reference) => {
           const reason = reference.reason === "ambiguous" ? "Ambiguous" : "Missing";
-          const type = reference.type ? ` (${reference.type})` : "";
-          return `${reason}: ${reference.name || "unnamed"}${type}`;
+          return `${reason}: ${reference.name || "unnamed"}`;
         })
         .join("; ");
     }
@@ -705,10 +785,10 @@
 
   function safeFolderName(value) {
     return (
-      String(value || "AutoFlow Project")
+      String(value || "AutoFlow Channel")
         .replace(/[<>:"|?*\x00-\x1f]/g, "-")
         .replace(/[\\/]+/g, "-")
-        .trim() || "AutoFlow Project"
+        .trim() || "AutoFlow Channel"
     );
   }
 
@@ -750,8 +830,21 @@
       studioState.flowContext?.flow_context_id ||
         project?.current_flow_context_id ||
         project?.flow_context?.flow_context_id ||
-        "",
+      "",
     ).trim();
+  }
+
+  function getStoredFlowContext(project) {
+    if (project?.flow_context) {
+      return Object.assign({}, project.flow_context);
+    }
+    if (project?.current_flow_context_id) {
+      return {
+        flow_context_id: project.current_flow_context_id,
+        status: "unknown",
+      };
+    }
+    return { flow_context_id: "", status: "disconnected" };
   }
 
   function buildFlowContextId(connectionState) {
@@ -880,7 +973,7 @@
       start_image_file_name: sourceFileName,
       selected_variant_generated_file_name: selectedVariant.generated_file_name || "",
       flow_context_id:
-        getVariantInputValue(variantInput, "flow_context_id", "flowContextId") ||
+        getVariantInputValue(selectedVariant, "flow_context_id", "flowContextId") ||
         getActiveFlowContextId(project),
       start_frame_flow_context_id: getVariantFlowContextId(selectedVariant),
       animation_prompt: animationPrompt,
@@ -940,8 +1033,10 @@
     });
   }
 
-  function getVideoQueueItems(project) {
-    const promptRecords = getProjectPromptRecords(project);
+  function getVideoQueueItems(project, videoId) {
+    const promptRecords = videoId
+      ? getVideoPromptRecords(project, videoId)
+      : getProjectPromptRecords(project);
     const videoJobs = getProjectVideoJobs(project);
 
     const items = promptRecords.map((record, sourceIndex) => {
@@ -995,7 +1090,7 @@
         canQueue = true;
         actionLabel = "Update Draft";
       } else if (status === "ready") {
-        reason = "Ready for a future video runner.";
+        reason = "Queued and ready to run.";
       } else if (status === "running") {
         reason = "Video generation is running.";
       } else if (status === "complete") {
@@ -1010,9 +1105,17 @@
       return {
         prompt_id: record.prompt_id,
         file_name: record.file_name || "",
+        scene_title: sceneTitleFromFileName(record.file_name),
+        video_id: String(record?.source?.import_id || "legacy"),
         animation_prompt: animationPrompt,
         selected_variant_id: selectedVariant?.variant_id || "",
         selected_file_name: selectedFileName,
+        selected_preview_url:
+          selectedVariant?.thumbnail_url ||
+          selectedVariant?.data_url ||
+          selectedVariant?.preview_url ||
+          selectedVariant?.fife_url ||
+          "",
         job,
         job_id: job?.job_id || "",
         status: itemStatus,
@@ -1230,7 +1333,7 @@
   async function finalizeSelectedImages() {
     const project = studioState.activeProject;
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
 
     const items = getSelectedImageFinalizationItems(project);
@@ -1247,7 +1350,7 @@
     }
 
     const timestamp = new Date().toISOString();
-    const folder = safeFolderName(project.display_name || project.name || "AutoFlow Project");
+    const folder = safeFolderName(project.display_name || project.name || "AutoFlow Channel");
     const downloaded = [];
     const failed = [];
 
@@ -1347,7 +1450,7 @@
   async function syncProjectMediaFromFiles(files) {
     const project = studioState.activeProject;
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
 
     const fileIndex = buildMediaFileIndex(files);
@@ -1610,6 +1713,10 @@
         countProjectItems(project, ["prompts", "prompt_index", "promptIndex"]) +
         promptRecords.length,
       videoJobs: getProjectVideoJobs(project).length,
+      logs: Array.isArray(studioState.logs) ? studioState.logs.length : 0,
+      logErrors: Array.isArray(studioState.logs)
+        ? studioState.logs.filter((entry) => getLogCategory(entry) === "error").length
+        : 0,
     };
   }
 
@@ -1632,15 +1739,16 @@
   async function loadProjectState() {
     studioState.isLoading = true;
     try {
+      await refreshStudioLogs();
       const domain = getDomain();
       if (!domain || typeof domain.load !== "function") {
-        throw new Error("Project domain API unavailable.");
+        throw new Error("Channel storage API unavailable.");
       }
 
       const domainState = await domain.load();
       studioState.domainState = domainState;
       studioState.activeProject = resolveActiveProject(domainState);
-      await refreshFlowContext();
+      studioState.flowContext = getStoredFlowContext(studioState.activeProject);
       studioState.lastError = null;
       return studioState;
     } catch (error) {
@@ -1654,12 +1762,12 @@
   async function setActiveProject(projectId) {
     const domain = getDomain();
     if (!domain || typeof domain.setActiveProject !== "function") {
-      throw new Error("Project domain API unavailable.");
+      throw new Error("Channel storage API unavailable.");
     }
 
     const result = await domain.setActiveProject(projectId);
     if (!result || !result.ok) {
-      const message = result?.error?.message || "Project switch failed.";
+      const message = result?.error?.message || "Channel switch failed.";
       throw new Error(message);
     }
 
@@ -1675,15 +1783,15 @@
     const domain = getDomain();
 
     if (!projectId) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
     if (!domain || typeof domain.updateProject !== "function") {
-      throw new Error("Project domain API unavailable.");
+      throw new Error("Channel storage API unavailable.");
     }
 
     const result = await domain.updateProject(projectId, updates);
     if (!result || !result.ok) {
-      const message = result?.error?.message || "Project update failed.";
+      const message = result?.error?.message || "Channel update failed.";
       throw new Error(message);
     }
 
@@ -1704,15 +1812,13 @@
     );
   }
 
-  async function refreshFlowContext() {
+  async function refreshFlowContext(options) {
+    const shouldPersist = !options || options.persist !== false;
     const project = studioState.activeProject;
+    const projectId = project?.project_id || "";
     const runtime = root.chrome?.runtime;
     if (!runtime || typeof runtime.sendMessage !== "function") {
-      studioState.flowContext =
-        project?.flow_context ||
-        (project?.current_flow_context_id
-          ? { flow_context_id: project.current_flow_context_id, status: "unknown" }
-          : { flow_context_id: "", status: "disconnected" });
+      studioState.flowContext = getStoredFlowContext(project);
       return studioState.flowContext;
     }
 
@@ -1731,9 +1837,13 @@
     const context = Object.assign(buildFlowContextFromConnection(response?.state || response), {
       updated_at: new Date().toISOString(),
     });
+    if (String(studioState.activeProject?.project_id || "") !== projectId) {
+      return context;
+    }
+
     studioState.flowContext = context;
 
-    if (project && hasFlowContextChanged(project, context)) {
+    if (shouldPersist && project && hasFlowContextChanged(project, context)) {
       await updateActiveProject({
         current_flow_context_id: context.flow_context_id,
         flow_context: context,
@@ -1746,7 +1856,7 @@
   async function createAsset(input) {
     const project = studioState.activeProject;
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
 
     const timestamp = new Date().toISOString();
@@ -1754,7 +1864,7 @@
       asset_id: createAssetId(),
       type: safeAssetType(input?.type),
       display_name: safeAssetName(input?.display_name || input?.name),
-      aliases: parseAliases(input?.aliases),
+      aliases: [],
       files: [],
       usage_count: 0,
       flow_upload_state: "none",
@@ -1767,19 +1877,86 @@
     return asset;
   }
 
+  async function createAssetWithFile(input, fileList) {
+    const project = studioState.activeProject;
+    if (!project) throw new Error("No active YouTube Channel selected.");
+    const displayName = String(input?.display_name || input?.name || "").trim();
+    if (!displayName) throw new Error("Asset name is required.");
+    const files = Array.prototype.slice.call(fileList || []).filter(Boolean);
+    if (!files.length) throw new Error("Choose one reference image.");
+    const file = files[0];
+    if (!String(file.type || "").toLowerCase().startsWith("image/")) {
+      throw new Error("Reference file must be an image.");
+    }
+    const timestamp = new Date().toISOString();
+    const storedFile = await buildAssetFile(file, true);
+    const asset = {
+      asset_id: createAssetId(),
+      type: "reference",
+      display_name: displayName,
+      aliases: [],
+      files: [storedFile],
+      primary_file_id: storedFile.asset_file_id,
+      usage_count: 0,
+      flow_upload_state: "none",
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+    await updateActiveProject({ assets: getProjectAssets(project).concat(asset) });
+    return asset;
+  }
+
+  async function replaceAssetFile(assetId, fileList) {
+    const project = studioState.activeProject;
+    const asset = findAsset(assetId);
+    if (!project) throw new Error("No active YouTube Channel selected.");
+    if (!asset) throw new Error("Asset not found.");
+    const files = Array.prototype.slice.call(fileList || []).filter(Boolean);
+    if (!files.length) throw new Error("Choose one reference image.");
+    const file = files[0];
+    if (!String(file.type || "").toLowerCase().startsWith("image/")) {
+      throw new Error("Reference file must be an image.");
+    }
+    const storedFile = await buildAssetFile(file, true);
+    const timestamp = new Date().toISOString();
+    await updateActiveProject({
+      assets: getProjectAssets(project).map((item) =>
+        item.asset_id === asset.asset_id
+          ? Object.assign({}, item, {
+              files: [storedFile],
+              primary_file_id: storedFile.asset_file_id,
+              flow_upload_state: "none",
+              flow_media_id: "",
+              flow_asset_file_id: "",
+              updated_at: timestamp,
+            })
+          : item,
+      ),
+    });
+    return findAsset(asset.asset_id);
+  }
+
   async function addAssetFiles(assetId, fileList) {
     const project = studioState.activeProject;
     const asset = findAsset(assetId);
     const incomingFiles = Array.prototype.slice.call(fileList || []).filter(Boolean);
 
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
     if (!asset) {
       throw new Error("Asset not found.");
     }
     if (!incomingFiles.length) {
       throw new Error("Choose at least one file.");
+    }
+    const unsupportedFile = incomingFiles.find(
+      (file) => !String(file?.type || "").toLowerCase().startsWith("image/"),
+    );
+    if (unsupportedFile) {
+      throw new Error(
+        `Reference files must be images: ${unsupportedFile.name || "unsupported file"}.`,
+      );
     }
 
     const existingFiles = getAssetFiles(asset);
@@ -1818,7 +1995,7 @@
     const fileId = String(assetFileId || "").trim();
 
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
     if (!asset) {
       throw new Error("Asset not found.");
@@ -1855,7 +2032,7 @@
     const asset = findAsset(assetId);
 
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
     if (!asset) {
       throw new Error("Asset not found.");
@@ -1872,9 +2049,7 @@
         display_name: Object.prototype.hasOwnProperty.call(patch, "display_name")
           ? safeAssetName(patch.display_name)
           : item.display_name,
-        aliases: Object.prototype.hasOwnProperty.call(patch, "aliases")
-          ? parseAliases(patch.aliases)
-          : item.aliases,
+        aliases: [],
         updated_at: timestamp,
       });
     });
@@ -1888,7 +2063,7 @@
     const asset = findAsset(assetId);
 
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
     if (!asset) {
       throw new Error("Asset not found.");
@@ -1909,80 +2084,138 @@
     return { asset_id: asset.asset_id, disabled: !!disabled };
   }
 
-  async function importProjectPromptJson(input, sourceName) {
+  function getAssetUsage(project, assetId) {
+    const id = String(assetId || "").trim();
+    if (!id) return { jobs: 0, prompts: 0 };
+
+    const promptRecords = getProjectPromptRecords(project);
+    const prompts = promptRecords.reduce((count, record) => {
+      const references = Array.isArray(record?.references) ? record.references : [];
+      const usesAsset = references.some((reference) => {
+        return reference?.asset_id === id || reference?.manual_asset_id === id;
+      });
+      return count + (usesAsset ? 1 : 0);
+    }, 0);
+
+    const videoJobs = getProjectVideoJobs(project);
+    const jobs = videoJobs.reduce((count, job) => {
+      const references = Array.isArray(job?.references) ? job.references : [];
+      const usesAsset = references.some((reference) => {
+        return reference?.asset_id === id || reference?.manual_asset_id === id;
+      });
+      return count + (usesAsset ? 1 : 0);
+    }, 0);
+
+    return { jobs, prompts };
+  }
+
+  async function deleteAsset(assetId) {
     const project = studioState.activeProject;
-    const contract = getContract();
+    const asset = findAsset(assetId);
 
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
-    if (!contract || typeof contract.parsePromptJson !== "function") {
-      throw new Error("Project JSON contract API unavailable.");
-    }
-
-    const parsed = contract.parsePromptJson(input);
-    if (!parsed || !parsed.ok) {
-      const errors = Array.isArray(parsed?.errors) ? parsed.errors.filter(Boolean) : [];
-      throw new Error(errors.join(" ") || "Project prompt JSON import failed.");
+    if (!asset) {
+      throw new Error("Asset not found.");
     }
 
-    const timestamp = new Date().toISOString();
-    const importId = createPromptImportId();
-    const importedRecords = parsed.records.map((record, index) => {
-      const references = Array.isArray(record.references)
-        ? record.references.filter(isObject).map((reference) => Object.assign({}, reference))
-        : [];
-      const rawReferenceNames = getRawReferenceNames(record);
-      return {
-        prompt_id: createPromptId(),
-        file_name: record.file_name,
-        image_prompt: record.image_prompt,
-        animation_prompt: record.animation_prompt || "",
-        references,
-        raw_reference_names: rawReferenceNames,
-        status: "imported",
-        can_generate_images: false,
-        source: {
-          import_id: importId,
-          source_name: String(sourceName || "Project prompt JSON").trim(),
-          source_index: index,
-          imported_at: timestamp,
-        },
-        created_at: timestamp,
-        updated_at: timestamp,
-      };
+    const assets = getProjectAssets(project).filter((item) => item.asset_id !== asset.asset_id);
+    const promptRecords = resolvePromptRecordsForProject(
+      Object.assign({}, project, { assets }),
+      getProjectPromptRecords(project),
+    );
+    await updateActiveProject({ assets, prompt_records: promptRecords });
+    return { asset_id: asset.asset_id, deleted: true };
+  }
+
+  async function importProjectPromptJson(input, sourceName, videoName) {
+    const project = studioState.activeProject;
+    const api = getPromptImport();
+
+    if (!project) {
+      throw new Error("No active YouTube Channel selected.");
+    }
+    if (!api || typeof api.importPromptJson !== "function") {
+      throw new Error("Channel prompt import API unavailable.");
+    }
+
+    const result = await api.importPromptJson(input, {
+      projectId: project.project_id,
+      sourceName,
     });
-    const resolvedRecords = resolvePromptRecordsForProject(project, importedRecords);
-    const summary = summarizePromptResolution(resolvedRecords);
-    const importRecord = {
-      import_id: importId,
-      source_name: String(sourceName || "Project prompt JSON").trim(),
-      imported_at: timestamp,
-      record_count: summary.record_count,
-      ready_count: summary.ready_count,
-      blocked_count: summary.blocked_count,
-      needs_resolution_count: summary.needs_resolution_count,
-      warning_count: Array.isArray(parsed.warnings) ? parsed.warnings.length : 0,
-      warnings: Array.isArray(parsed.warnings) ? parsed.warnings.slice() : [],
-      contract_version: parsed.meta?.contract_version || contract.CONTRACT_VERSION || 1,
-    };
+    studioState.domainState = result.state;
+    studioState.activeProject = resolveActiveProject(result.state) || result.project;
+    const cleanVideoName = String(videoName || "").trim();
+    if (cleanVideoName) {
+      const promptImports = getProjectPromptImports(studioState.activeProject).map((item) =>
+        item.import_id === result.import_record.import_id
+          ? Object.assign({}, item, { video_name: cleanVideoName })
+          : item,
+      );
+      await updateActiveProject({ prompt_imports: promptImports });
+      result.project = studioState.activeProject;
+      result.state = studioState.domainState;
+    }
+    studioState.lastError = null;
+    return result;
+  }
 
+  async function renameProjectVideo(videoId, displayName) {
+    const project = studioState.activeProject;
+    if (!project) throw new Error("No active YouTube Channel selected.");
+    const key = String(videoId || "").trim();
+    const name = String(displayName || "").trim();
+    if (!key || !name) throw new Error("Video name is required.");
+    if (key === "legacy") {
+      await updateActiveProject({
+        settings: Object.assign({}, project.settings || {}, { legacy_video_name: name }),
+      });
+      return getProjectVideos(studioState.activeProject).find((video) => video.video_id === key);
+    }
+    const promptImports = getProjectPromptImports(project);
+    if (!promptImports.some((item) => item.import_id === key)) {
+      throw new Error("Video not found.");
+    }
     await updateActiveProject({
-      prompt_records: getProjectPromptRecords(project).concat(resolvedRecords),
-      prompt_imports: getProjectPromptImports(project).concat(importRecord),
+      prompt_imports: promptImports.map((item) =>
+        item.import_id === key ? Object.assign({}, item, { video_name: name }) : item,
+      ),
     });
+    return getProjectVideos(studioState.activeProject).find((video) => video.video_id === key);
+  }
 
-    return {
-      import_record: importRecord,
-      records: resolvedRecords,
-      warnings: importRecord.warnings.slice(),
-    };
+  async function deleteProjectVideo(videoId) {
+    const project = studioState.activeProject;
+    if (!project) throw new Error("No active YouTube Channel selected.");
+    const key = String(videoId || "").trim();
+    const promptRecords = getVideoPromptRecords(project, key);
+    if (!key || !promptRecords.length) throw new Error("Video not found.");
+    const promptIds = new Set(promptRecords.map((record) => record.prompt_id));
+    await updateActiveProject({
+      prompt_imports:
+        key === "legacy"
+          ? getProjectPromptImports(project)
+          : getProjectPromptImports(project).filter((item) => item.import_id !== key),
+      prompt_records: getProjectPromptRecords(project).filter(
+        (record) => !promptIds.has(record.prompt_id),
+      ),
+      image_variants: getProjectImageVariants(project).filter(
+        (variant) => !promptIds.has(variant.prompt_id),
+      ),
+      image_generation_runs: getProjectImageGenerationRuns(project).filter((run) => {
+        const requestItems = Array.isArray(run.request_items) ? run.request_items : [];
+        return !requestItems.some((item) => promptIds.has(item.prompt_id));
+      }),
+      video_jobs: getProjectVideoJobs(project).filter((job) => !promptIds.has(job.prompt_id)),
+    });
+    return { video_id: key, deleted: true };
   }
 
   async function resolveActiveProjectPromptReferences() {
     const project = studioState.activeProject;
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
 
     const promptRecords = getProjectPromptRecords(project);
@@ -2006,7 +2239,7 @@
     const asset = getAssetById(assets, assetId);
 
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
     if (!promptKey) {
       throw new Error("Prompt Record is missing.");
@@ -2028,11 +2261,6 @@
     const reference = references[index];
     if (!reference) {
       throw new Error("Reference not found on Prompt Record.");
-    }
-
-    const referenceType = String(reference.type || "").trim().toLowerCase();
-    if (referenceType && asset.type !== referenceType) {
-      throw new Error(`Reference expects ${referenceType}; selected Asset is ${asset.type || "unknown"}.`);
     }
 
     const timestamp = new Date().toISOString();
@@ -2076,7 +2304,7 @@
     /** @type {any} */
     const project = studioState.activeProject;
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
 
     const gate = getImageGenerationGate(project);
@@ -2133,7 +2361,7 @@
   async function recordImageGenerationRunVariants(imageRunId, completionItems) {
     const activeProject = studioState.activeProject;
     if (!activeProject) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
 
     const project = Object(activeProject);
@@ -2229,7 +2457,7 @@
   async function createOrUpdateVideoDraft(promptId) {
     const project = studioState.activeProject;
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
 
     const promptKey = String(promptId || "").trim();
@@ -2277,7 +2505,7 @@
   async function addVideoDraftToQueue(jobId) {
     const project = studioState.activeProject;
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
 
     const jobKey = String(jobId || "").trim();
@@ -2329,10 +2557,24 @@
     return queuedJobs.find((job) => job.job_id === jobKey);
   }
 
+  async function queuePromptVideo(promptId) {
+    const project = studioState.activeProject;
+    if (!project) throw new Error("No active YouTube Channel selected.");
+    const key = String(promptId || "").trim();
+    const currentItem = getVideoQueueItems(project).find((item) => item.prompt_id === key);
+    if (!currentItem) throw new Error("Scene not found.");
+    if (currentItem.status === "ready") return currentItem.job;
+    if (currentItem.status === "running" || currentItem.status === "complete") {
+      return currentItem.job;
+    }
+    const draft = await createOrUpdateVideoDraft(key);
+    return addVideoDraftToQueue(draft.job_id);
+  }
+
   async function holdVideoJob(jobId) {
     const project = studioState.activeProject;
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
 
     const jobKey = String(jobId || "").trim();
@@ -2366,7 +2608,7 @@
   async function removeVideoJob(jobId) {
     const project = studioState.activeProject;
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
 
     const jobKey = String(jobId || "").trim();
@@ -2390,7 +2632,7 @@
   async function moveVideoJob(jobId, direction) {
     const project = studioState.activeProject;
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
 
     const jobKey = String(jobId || "").trim();
@@ -2434,7 +2676,7 @@
   async function runVideoJob(jobId) {
     const project = studioState.activeProject;
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
 
     const jobKey = String(jobId || "").trim();
@@ -2492,7 +2734,13 @@
     }
 
     const timestamp = new Date().toISOString();
-    const folder = project.display_name || project.name || "autoflow-project-videos";
+    const videoId = String(promptRecord?.source?.import_id || "legacy");
+    const video = getProjectVideos(project).find((item) => item.video_id === videoId);
+    const channelFolder = safeFolderName(
+      project.display_name || project.name || "autoflow-channel",
+    );
+    const videoFolder = safeFolderName(video?.display_name || "imported-video");
+    const folder = `${channelFolder}/${videoFolder}`;
     const settings = Object.assign({}, project.settings || {}, {
       mode: "video",
       folder,
@@ -2504,10 +2752,12 @@
       videoRatio: project.settings?.videoRatio || "landscape",
       videoDuration: project.settings?.videoDuration || 8,
       autoDownloadImages: false,
-      autoDownloadVideos: true,
+      autoDownloadVideos: false,
       videoDownloadQuality: project.settings?.videoDownloadQuality || "standard",
-      projectName: project.display_name || project.name || "AutoFlow Project",
-      projectFolder: folder,
+      projectName: project.display_name || project.name || "AutoFlow Channel",
+      projectFolder: channelFolder,
+      videoId,
+      videoName: video?.display_name || "Imported video",
       batchKind: "project_video_job",
       speedMode: project.settings?.speedMode || "fast",
     });
@@ -2547,7 +2797,7 @@
   async function repairVideoJobStartFrame(jobId) {
     const project = studioState.activeProject;
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
 
     const currentContextId = getActiveFlowContextId(project);
@@ -2650,7 +2900,7 @@
   async function stopVideoJob(jobId) {
     const project = studioState.activeProject;
     if (!project) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
 
     const jobKey = String(jobId || "").trim();
@@ -2738,7 +2988,7 @@
   async function selectImageVariant(promptId, variantId) {
     const activeProject = studioState.activeProject;
     if (!activeProject) {
-      throw new Error("No active Project selected.");
+      throw new Error("No active YouTube Channel selected.");
     }
 
     const project = Object(activeProject);
@@ -2810,8 +3060,13 @@
     VIEWS,
     addAssetFiles,
     addVideoDraftToQueue,
+    appendStudioLog,
+    clearStudioLogs,
     createOrUpdateVideoDraft,
     createAsset,
+    createAssetWithFile,
+    deleteAsset,
+    deleteProjectVideo,
     formatDate,
     finalizeSelectedImages,
     getAssetTypeDefinition,
@@ -2824,8 +3079,10 @@
     getProjectPromptImports,
     getProjectPromptRecords,
     getProjectVideoJobs,
+    getProjectVideos,
     getSelectedImageFinalizationItems,
     getVideoQueueItems,
+    getVideoPromptRecords,
     getActiveAssets(project) {
       return getProjectAssets(project).filter(isAssetActive);
     },
@@ -2844,14 +3101,19 @@
     mapPromptReferenceToAsset,
     holdVideoJob,
     moveVideoJob,
+    queuePromptVideo,
     removeVideoJob,
     recordImageGenerationRunVariants,
     readTextFile,
     refreshFlowContext,
+    refreshStudioLogs,
     repairVideoJobStartFrame,
+    renameProjectVideo,
+    replaceAssetFile,
     resolveActiveProjectPromptReferences,
     buildImageVariantFileName,
     selectImageVariant,
+    sceneTitleFromFileName,
     startImageGenerationRun,
     runVideoJob,
     syncProjectMediaFromFiles,

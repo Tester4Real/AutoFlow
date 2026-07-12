@@ -1,93 +1,20 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AutoFlow Project Studio</title>
-    <link rel="stylesheet" href="studio.css" />
+    <meta name="color-scheme" content="dark" />
+    <title>AutoFlow Studio</title>
+    <link rel="stylesheet" href="generated/studio.bundle.css" />
   </head>
   <body>
-    <div class="studio-app">
-      <header class="studio-topbar">
-        <div class="brand-lockup">
-          <span class="material-symbols-outlined brand-mark">account_tree</span>
-          <div>
-            <h1>AutoFlow Project Studio</h1>
-            <p id="active-project-readout">No project selected</p>
-          </div>
-        </div>
+    <div id="studio-root"></div>
 
-        <div class="topbar-controls">
-          <label class="project-picker-label" for="project-picker">Project</label>
-          <select id="project-picker" class="project-picker" aria-label="Active project">
-            <option value="">Loading projects</option>
-          </select>
-          <button
-            id="btn-refresh-project-state"
-            class="icon-button"
-            type="button"
-            title="Reload project state"
-            aria-label="Reload project state"
-          >
-            <span class="material-symbols-outlined">refresh</span>
-          </button>
-        </div>
-      </header>
-
-      <div class="studio-frame">
-        <aside class="studio-nav" aria-label="Project Studio navigation">
-          <button class="nav-item active" type="button" data-view="project">
-            <span class="material-symbols-outlined">tune</span>
-            <span>Project</span>
-          </button>
-          <button class="nav-item" type="button" data-view="assets">
-            <span class="material-symbols-outlined">folder_managed</span>
-            <span>Assets</span>
-          </button>
-          <button class="nav-item" type="button" data-view="import">
-            <span class="material-symbols-outlined">rule_folder</span>
-            <span>Import / Resolve</span>
-          </button>
-          <button class="nav-item" type="button" data-view="images">
-            <span class="material-symbols-outlined">photo_library</span>
-            <span>Image Review</span>
-          </button>
-          <button class="nav-item" type="button" data-view="video">
-            <span class="material-symbols-outlined">queue_play_next</span>
-            <span>Video Queue</span>
-          </button>
-          <button class="nav-item" type="button" data-view="gallery">
-            <span class="material-symbols-outlined">download_done</span>
-            <span>Gallery</span>
-          </button>
-        </aside>
-
-        <main class="studio-workspace" id="studio-workspace" tabindex="-1">
-          <div class="workspace-heading">
-            <span class="material-symbols-outlined" id="workspace-icon">tune</span>
-            <div>
-              <h2 id="workspace-title">Project</h2>
-              <p id="workspace-subtitle">Loading project state</p>
-            </div>
-          </div>
-
-          <section id="workspace-content" class="workspace-content" aria-live="polite"></section>
-        </main>
-
-        <aside class="details-inspector" aria-label="Project details">
-          <div class="inspector-header">
-            <span class="material-symbols-outlined">info</span>
-            <h2>Details</h2>
-          </div>
-          <dl id="details-list" class="details-list"></dl>
-        </aside>
-      </div>
-    </div>
-
+    <script src="app/studio-bootstrap.js"></script>
     <script src="../shared/project-domain/00-project-domain.js"></script>
     <script src="../shared/project-domain/01-project-json-contract.js"></script>
+    <script src="../shared/project-domain/02-project-prompt-import.js"></script>
     <script src="app/00-studio-state.js"></script>
-    <script src="app/01-studio-shell.js"></script>
-    <script src="app/07-studio-boot.js"></script>
+    <script src="generated/studio.bundle.js"></script>
   </body>
 </html>

@@ -1,0 +1,5 @@
+@import "@heroui/styles";
+@import "./studio-app.css";
+
+@source "../../../node_modules/@heroui/react/dist/**/*.js";
+@source "./**/*.{js,jsx}";

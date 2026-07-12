@@ -1,0 +1,752 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { Button, Card, Chip, Modal, ProgressBar, Toast, toast } from "@heroui/react";
+import {
+  Activity,
+  AlertCircle,
+  Check,
+  CirclePause,
+  FileJson,
+  FolderOpen,
+  FolderSync,
+  Image as ImageIcon,
+  Images,
+  LayoutGrid,
+  ListVideo,
+  LoaderCircle,
+  Pencil,
+  Play,
+  Plus,
+  RefreshCw,
+  Save,
+  Search,
+  Square,
+  Trash2,
+  Upload,
+  Video,
+  Tv,
+  X,
+} from "lucide-react";
+
+const studioApi = globalThis.TFProjectStudioState;
+const domainApi = globalThis.TFProjectDomain;
+
+const NAV_ITEMS = [
+  { id: "channels", label: "Channels", icon: Tv },
+  { id: "assets", label: "Assets", icon: ImageIcon },
+  { id: "import", label: "Import", icon: Upload },
+  { id: "images", label: "Image Review", icon: Images },
+  { id: "video", label: "Video Queue", icon: ListVideo },
+  { id: "media", label: "Media", icon: LayoutGrid },
+  { id: "logs", label: "Logs", icon: Activity },
+];
+
+class StudioErrorBoundary extends React.Component {
+  state = { error: null };
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error) {
+    console.error("Studio render failed", error);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="studio-crash">
+        <AlertCircle size={24} />
+        <h1>Studio could not open</h1>
+        <p>{this.state.error?.message || "An unexpected render error occurred."}</p>
+        <button type="button" onClick={() => location.reload()}>Reload Studio</button>
+      </div>
+    );
+  }
+}
+
+function captureStudioState() {
+  const state = studioApi.getState();
+  return {
+    activeProject: state.activeProject || null,
+    domainState: state.domainState || { projects: [] },
+    logs: Array.isArray(state.logs) ? state.logs.slice() : [],
+    flowContext: state.flowContext || null,
+    lastError: state.lastError || null,
+  };
+}
+
+function primaryAssetFile(asset) {
+  const files = Array.isArray(asset?.files) ? asset.files : [];
+  return (
+    files.find((file) => file.asset_file_id === asset?.primary_file_id) ||
+    files.find((file) => file.is_primary || file.role === "primary") ||
+    files[0] ||
+    null
+  );
+}
+
+function previewUrl(value) {
+  return (
+    value?.thumbnail_url ||
+    value?.data_url ||
+    value?.preview_url ||
+    value?.fife_url ||
+    value?.video_url ||
+    ""
+  );
+}
+
+function statusColor(status) {
+  if (status === "complete" || status === "ready") return "success";
+  if (status === "failed" || status === "needs_review") return "danger";
+  if (status === "running") return "accent";
+  if (status === "paused") return "warning";
+  return "default";
+}
+
+function EmptyState({ icon: Icon = FolderOpen, title, description, action }) {
+  return (
+    <div className="empty-state">
+      <span className="empty-icon"><Icon size={24} /></span>
+      <h3>{title}</h3>
+      {description ? <p>{description}</p> : null}
+      {action}
+    </div>
+  );
+}
+
+function PageHeader({ title, description, actions }) {
+  return (
+    <header className="page-header">
+      <div>
+        <h2>{title}</h2>
+        {description ? <p>{description}</p> : null}
+      </div>
+      {actions ? <div className="page-actions">{actions}</div> : null}
+    </header>
+  );
+}
+
+function StudioModal({ open, onOpenChange, title, children, footer, size = "md" }) {
+  return (
+    <Modal.Root isOpen={open} onOpenChange={onOpenChange}>
+      <Modal.Backdrop className="studio-modal-backdrop" isDismissable>
+        <Modal.Container className="studio-modal-container" placement="center" size={size}>
+          <Modal.Dialog className="studio-modal-dialog">
+            <Modal.Header className="studio-modal-header">
+              <Modal.Heading>{title}</Modal.Heading>
+              <Modal.CloseTrigger className="modal-close" aria-label="Close dialog">
+                <X size={18} />
+              </Modal.CloseTrigger>
+            </Modal.Header>
+            <Modal.Body className="studio-modal-body">{children}</Modal.Body>
+            {footer ? <Modal.Footer className="studio-modal-footer">{footer}</Modal.Footer> : null}
+          </Modal.Dialog>
+        </Modal.Container>
+      </Modal.Backdrop>
+    </Modal.Root>
+  );
+}
+
+function DropZone({ file, onFile, accept, label, hint, preview }) {
+  const inputRef = useRef(null);
+  const [dragging, setDragging] = useState(false);
+  function choose(files) {
+    const next = Array.from(files || [])[0] || null;
+    if (next) onFile(next);
+  }
+  return (
+    <div
+      className={`drop-zone ${dragging ? "dragging" : ""}`}
+      onDragOver={(event) => {
+        event.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setDragging(false);
+        choose(event.dataTransfer.files);
+      }}
+    >
+      {preview ? <img className="drop-preview" src={preview} alt="Selected upload" /> : <Upload size={24} />}
+      <strong>{file?.name || label}</strong>
+      <span>{file ? "Ready to save" : hint}</span>
+      <Button size="sm" variant="outline" onPress={() => inputRef.current?.click()}>
+        Choose file
+      </Button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={accept}
+        hidden
+        onChange={(event) => choose(event.target.files)}
+      />
+    </div>
+  );
+}
+
+function ChannelDialog({ open, onOpenChange, onSave, busy }) {
+  const [name, setName] = useState("");
+  useEffect(() => {
+    if (open) setName("");
+  }, [open]);
+  return (
+    <StudioModal
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Add YouTube channel"
+      footer={
+        <>
+          <Button variant="ghost" onPress={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="primary" isDisabled={!name.trim() || busy} onPress={() => onSave(name.trim())}>
+            {busy ? <LoaderCircle className="spin" size={17} /> : <Plus size={17} />}
+            Add channel
+          </Button>
+        </>
+      }
+    >
+      <label className="field-label">
+        Channel name
+        <input value={name} onChange={(event) => setName(event.target.value)} autoFocus />
+      </label>
+    </StudioModal>
+  );
+}
+
+function VideoDialog({ open, mode, video, onOpenChange, onSave, busy }) {
+  const [name, setName] = useState("");
+  const [file, setFile] = useState(null);
+  useEffect(() => {
+    if (!open) return;
+    setName(mode === "rename" ? video?.display_name || "" : "");
+    setFile(null);
+  }, [open, mode, video]);
+  const ready = mode === "rename" ? !!name.trim() : !!file;
+  return (
+    <StudioModal
+      open={open}
+      onOpenChange={onOpenChange}
+      title={mode === "rename" ? "Rename video" : "Add video"}
+      footer={
+        <>
+          <Button variant="ghost" onPress={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="primary" isDisabled={!ready || busy} onPress={() => onSave({ name: name.trim(), file })}>
+            {busy ? <LoaderCircle className="spin" size={17} /> : mode === "rename" ? <Save size={17} /> : <Upload size={17} />}
+            {mode === "rename" ? "Save" : "Import video"}
+          </Button>
+        </>
+      }
+    >
+      <label className="field-label">
+        Video name {mode === "add" ? <span className="optional">Optional</span> : null}
+        <input value={name} onChange={(event) => setName(event.target.value)} autoFocus />
+      </label>
+      {mode === "add" ? (
+        <DropZone
+          file={file}
+          onFile={setFile}
+          accept=".json,application/json"
+          label="Drop the video JSON here"
+          hint="file_name and image_prompt are required; animation_prompt is optional"
+        />
+      ) : null}
+    </StudioModal>
+  );
+}
+
+function AssetDialog({ open, mode, asset, onOpenChange, onSave, busy }) {
+  const [name, setName] = useState("");
+  const [file, setFile] = useState(null);
+  const [localPreview, setLocalPreview] = useState("");
+  useEffect(() => {
+    if (!open) return;
+    setName(mode === "edit" ? asset?.display_name || "" : "");
+    setFile(null);
+    setLocalPreview(primaryAssetFile(asset)?.data_url || "");
+  }, [open, mode, asset]);
+  useEffect(() => {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setLocalPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+  const ready = !!name.trim() && (mode === "edit" || !!file);
+  return (
+    <StudioModal
+      open={open}
+      onOpenChange={onOpenChange}
+      title={mode === "edit" ? "Edit asset" : "Add asset"}
+      footer={
+        <>
+          <Button variant="ghost" onPress={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="primary" isDisabled={!ready || busy} onPress={() => onSave({ name: name.trim(), file })}>
+            {busy ? <LoaderCircle className="spin" size={17} /> : <Save size={17} />}
+            Save asset
+          </Button>
+        </>
+      }
+    >
+      <label className="field-label">
+        Asset name
+        <input value={name} onChange={(event) => setName(event.target.value)} autoFocus />
+      </label>
+      <DropZone
+        file={file}
+        onFile={setFile}
+        accept="image/*"
+        label={mode === "edit" ? "Drop a replacement image" : "Drop the reference image here"}
+        hint={mode === "edit" ? "Leave unchanged or choose a replacement" : "PNG, JPEG, or WebP"}
+        preview={localPreview}
+      />
+    </StudioModal>
+  );
+}
+
+function ConfirmDialog({ open, title, description, confirmLabel = "Delete", onOpenChange, onConfirm, busy }) {
+  return (
+    <StudioModal
+      open={open}
+      onOpenChange={onOpenChange}
+      title={title}
+      footer={
+        <>
+          <Button variant="ghost" onPress={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="danger" isDisabled={busy} onPress={onConfirm}>
+            {busy ? <LoaderCircle className="spin" size={17} /> : <Trash2 size={17} />}
+            {confirmLabel}
+          </Button>
+        </>
+      }
+    >
+      <p className="confirm-copy">{description}</p>
+    </StudioModal>
+  );
+}
+
+function ChannelsView({ project, videos, onAddChannel, onRenameChannel, onAddVideo, onOpenVideo, onRenameVideo, onDeleteVideo, busy }) {
+  const [channelName, setChannelName] = useState(project?.display_name || "");
+  useEffect(() => setChannelName(project?.display_name || ""), [project?.project_id, project?.display_name]);
+  return (
+    <div className="view-stack">
+      <PageHeader
+        title="Channels"
+        description="Organize each YouTube channel into individual videos."
+        actions={<Button variant="primary" onPress={onAddChannel}><Plus size={17} />Add channel</Button>}
+      />
+      {project ? (
+        <section className="channel-settings-band">
+          <div>
+            <span className="eyebrow">Active channel</span>
+            <label className="inline-edit-field">
+              <input value={channelName} onChange={(event) => setChannelName(event.target.value)} />
+              <Button isIconOnly size="sm" variant="secondary" aria-label="Save channel name" isDisabled={!channelName.trim() || channelName.trim() === project.display_name || busy} onPress={() => onRenameChannel(channelName.trim())}>
+                <Save size={16} />
+              </Button>
+            </label>
+          </div>
+          <Button variant="outline" onPress={onAddVideo}><Plus size={17} />Add video</Button>
+        </section>
+      ) : null}
+      {!project ? (
+        <EmptyState title="Add your first channel" description="A channel keeps its videos, assets, images, and queue together." action={<Button variant="primary" onPress={onAddChannel}><Plus size={17} />Add channel</Button>} />
+      ) : videos.length ? (
+        <div className="video-list">
+          {videos.map((video) => {
+            const progress = video.prompt_count ? Math.round((video.selected_count / video.prompt_count) * 100) : 0;
+            return (
+              <Card key={video.video_id} className="video-card" variant="secondary">
+                <Card.Content className="video-card-content">
+                  <div className="video-icon"><Video size={20} /></div>
+                  <div className="video-card-main">
+                    <h3>{video.display_name}</h3>
+                    <span>{video.selected_count} of {video.prompt_count} scenes selected</span>
+                    <ProgressBar aria-label="Image selection progress" value={progress} color="accent">
+                      <ProgressBar.Track><ProgressBar.Fill /></ProgressBar.Track>
+                    </ProgressBar>
+                  </div>
+                  <div className="row-actions">
+                    <Button size="sm" variant="secondary" onPress={() => onOpenVideo(video.video_id)}>Open</Button>
+                    <Button isIconOnly size="sm" variant="ghost" aria-label={`Rename ${video.display_name}`} onPress={() => onRenameVideo(video)}><Pencil size={16} /></Button>
+                    <Button isIconOnly size="sm" variant="ghost" aria-label={`Delete ${video.display_name}`} onPress={() => onDeleteVideo(video)}><Trash2 size={16} /></Button>
+                  </div>
+                </Card.Content>
+              </Card>
+            );
+          })}
+        </div>
+      ) : (
+        <EmptyState icon={FileJson} title="No videos yet" description="Import one JSON file to create a video." action={<Button variant="primary" onPress={onAddVideo}><Upload size={17} />Import video JSON</Button>} />
+      )}
+    </div>
+  );
+}
+
+function AssetsView({ project, onAdd, onEdit, onDelete }) {
+  const assets = Array.isArray(project?.assets) ? project.assets : [];
+  return (
+    <div className="view-stack">
+      <PageHeader title="Assets" description="Reusable reference images for this channel." actions={<Button variant="primary" onPress={onAdd}><Plus size={17} />Add asset</Button>} />
+      {assets.length ? (
+        <div className="asset-grid">
+          {assets.map((asset) => {
+            const file = primaryAssetFile(asset);
+            return (
+              <Card key={asset.asset_id} className="asset-card" variant="secondary">
+                <Card.Content>
+                  <div className="asset-preview">
+                    {file?.data_url ? <img src={file.data_url} alt={asset.display_name} /> : <ImageIcon size={26} />}
+                  </div>
+                  <div className="asset-card-footer">
+                    <strong>{asset.display_name}</strong>
+                    <div className="row-actions">
+                      <Button isIconOnly size="sm" variant="ghost" aria-label={`Edit ${asset.display_name}`} onPress={() => onEdit(asset)}><Pencil size={16} /></Button>
+                      <Button isIconOnly size="sm" variant="ghost" aria-label={`Delete ${asset.display_name}`} onPress={() => onDelete(asset)}><Trash2 size={16} /></Button>
+                    </div>
+                  </div>
+                </Card.Content>
+              </Card>
+            );
+          })}
+        </div>
+      ) : (
+        <EmptyState icon={ImageIcon} title="No assets yet" description="Add a name and reference image together." action={<Button variant="primary" onPress={onAdd}><Plus size={17} />Add asset</Button>} />
+      )}
+    </div>
+  );
+}
+
+function ImportView({ project, videos, onImport, onResolve, busy }) {
+  const [file, setFile] = useState(null);
+  const [name, setName] = useState("");
+  const [mapping, setMapping] = useState({});
+  const blockedRecords = studioApi.getProjectPromptRecords(project).filter((record) => record.status === "blocked");
+  const assets = studioApi.getActiveAssets(project);
+  return (
+    <div className="view-stack">
+      <PageHeader title="Import" description="One JSON file creates one video." />
+      <section className="import-layout">
+        <div className="import-form">
+          <label className="field-label">Video name <span className="optional">Optional</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
+          <DropZone file={file} onFile={setFile} accept=".json,application/json" label="Drop the video JSON here" hint="file_name and image_prompt are required; animation_prompt is optional" />
+          <Button variant="primary" isDisabled={!file || busy} onPress={() => onImport(file, name.trim())}>{busy ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}Import video</Button>
+        </div>
+        <div className="import-history">
+          <span className="eyebrow">Videos</span>
+          {videos.length ? videos.map((video) => <div className="compact-row" key={video.video_id}><FileJson size={16} /><span>{video.display_name}</span><small>{video.prompt_count} scenes</small></div>) : <p className="muted-copy">No video JSON imported yet.</p>}
+        </div>
+      </section>
+      {blockedRecords.length ? (
+        <section className="resolve-section">
+          <div className="section-heading"><div><h3>Needs a reference</h3><p>Map missing names to a channel asset.</p></div><Chip color="warning" variant="soft">{blockedRecords.length}</Chip></div>
+          <div className="resolve-list">
+            {blockedRecords.flatMap((record) => (record.blocked_references || []).map((reference) => {
+              const key = `${record.prompt_id}:${reference.reference_index}`;
+              return (
+                <div className="resolve-row" key={key}>
+                  <div><strong>{studioApi.sceneTitleFromFileName(record.file_name)}</strong><span>{reference.name || "Unnamed reference"}</span></div>
+                  <select value={mapping[key] || ""} onChange={(event) => setMapping((current) => ({ ...current, [key]: event.target.value }))}>
+                    <option value="">Choose asset</option>
+                    {assets.map((asset) => <option key={asset.asset_id} value={asset.asset_id}>{asset.display_name}</option>)}
+                  </select>
+                  <Button size="sm" variant="secondary" isDisabled={!mapping[key]} onPress={() => onResolve(record.prompt_id, reference.reference_index, mapping[key])}>Use asset</Button>
+                </div>
+              );
+            }))}
+          </div>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+function ImageReviewView({ project, video, onSelect }) {
+  if (!video) return <EmptyState icon={Images} title="Choose a video" description="Image Review is organized one video at a time." />;
+  const records = studioApi.getVideoPromptRecords(project, video.video_id);
+  const variants = studioApi.getProjectImageVariants(project);
+  const rows = records.map((record) => ({
+    record,
+    variants: variants.filter((variant) => variant.prompt_id === record.prompt_id).sort((left, right) => Number(left.variant_index || 0) - Number(right.variant_index || 0)),
+  })).filter((row) => row.variants.length);
+  return (
+    <div className="view-stack">
+      <PageHeader title="Image Review" description={video.display_name} />
+      {rows.length ? <div className="review-list">{rows.map(({ record, variants: sceneVariants }) => (
+        <section className="scene-review" key={record.prompt_id}>
+          <div className="scene-review-heading"><h3>{studioApi.sceneTitleFromFileName(record.file_name)}</h3><span>{sceneVariants.length} options</span></div>
+          <div className="variant-grid">{sceneVariants.map((variant) => {
+            const selected = record.selected_variant_id === variant.variant_id || variant.is_selected;
+            const source = previewUrl(variant);
+            return (
+              <button className={`variant-choice ${selected ? "selected" : ""}`} key={variant.variant_id} type="button" aria-pressed={selected} onClick={() => onSelect(record.prompt_id, variant.variant_id)}>
+                <span className="variant-media">{source ? <img src={source} alt={`${studioApi.sceneTitleFromFileName(record.file_name)} option ${Number(variant.variant_index || 0) + 1}`} /> : <span className="preview-placeholder"><ImageIcon size={24} /></span>}</span>
+                <span className="variant-label">Option {Number(variant.variant_index || 0) + 1}</span>
+                {selected ? <span className="selected-mark"><Check size={16} /></span> : null}
+              </button>
+            );
+          })}</div>
+        </section>
+      ))}</div> : <EmptyState icon={Images} title="No generated images" description="Generate images for this video, then review them here." />}
+    </div>
+  );
+}
+
+function VideoQueueView({ project, video, runner, onRunAll, onPause, onContinue, onQueue, onRun, onStop, onRemove, onOpenImages }) {
+  if (!video) return <EmptyState icon={ListVideo} title="Choose a video" description="Video Queue is organized one video at a time." />;
+  const items = studioApi.getVideoQueueItems(project, video.video_id).filter((item) => !!item.animation_prompt);
+  const completed = items.filter((item) => item.status === "complete").length;
+  const activeRunner = runner.videoId === video.video_id;
+  const runnerAction = activeRunner && runner.status === "running"
+    ? <Button variant="outline" onPress={onPause}><CirclePause size={17} />Pause after current</Button>
+    : activeRunner && runner.status === "paused"
+      ? <Button variant="primary" onPress={onContinue}><Play size={17} />Continue</Button>
+      : <Button variant="primary" isDisabled={!items.length || completed === items.length} onPress={onRunAll}><Play size={17} />Run all</Button>;
+  return (
+    <div className="view-stack">
+      <PageHeader title="Video Queue" description={video.display_name} actions={runnerAction} />
+      {activeRunner && runner.status !== "idle" ? (
+        <div className={`runner-banner ${runner.status}`}>
+          {runner.status === "running" ? <LoaderCircle className="spin" size={18} /> : <AlertCircle size={18} />}
+          <div><strong>{runner.status === "running" ? "Running sequentially" : "Queue paused"}</strong><span>{runner.error || `${completed} of ${items.length} complete`}</span></div>
+        </div>
+      ) : null}
+      {items.length ? <div className="queue-list">{items.map((item) => {
+        const canQueue = item.status === "draft" && item.selected_variant_id;
+        return (
+          <Card key={item.prompt_id} className={`queue-card status-${item.status}`} variant="secondary">
+            <Card.Content className="queue-card-content">
+              <div className="queue-preview">{item.selected_preview_url ? <img src={item.selected_preview_url} alt={item.scene_title} /> : <span className="preview-placeholder"><ImageIcon size={24} /></span>}</div>
+              <div className="queue-main"><div className="queue-title-row"><h3>{item.scene_title}</h3><Chip size="sm" color={statusColor(item.status)} variant="soft">{item.status_label}</Chip></div>{item.status === "failed" ? <p className="queue-error">{item.reason}</p> : <p>{item.animation_prompt}</p>}</div>
+              <div className="queue-actions">
+                {!item.selected_variant_id ? <Button size="sm" variant="outline" onPress={onOpenImages}>Select image</Button> : null}
+                {canQueue ? <Button size="sm" variant="secondary" onPress={() => onQueue(item.prompt_id)}>Add to queue</Button> : null}
+                {item.can_run || item.can_retry ? <Button size="sm" variant={item.can_retry ? "outline" : "secondary"} onPress={() => onRun(item.job_id)}>{item.can_retry ? <RefreshCw size={15} /> : <Play size={15} />}{item.can_retry ? "Retry" : "Run"}</Button> : null}
+                {item.can_stop ? <Button size="sm" variant="danger-soft" onPress={() => onStop(item.job_id)}><Square size={15} />Stop</Button> : null}
+                {item.can_remove ? <Button isIconOnly size="sm" variant="ghost" aria-label={`Remove ${item.scene_title} from queue`} onPress={() => onRemove(item.job_id)}><Trash2 size={15} /></Button> : null}
+              </div>
+            </Card.Content>
+          </Card>
+        );
+      })}</div> : <EmptyState icon={ListVideo} title="No video-ready scenes" description="Scenes need an optional animation_prompt and a selected image before they can run." action={<Button variant="outline" onPress={onOpenImages}>Open Image Review</Button>} />}
+    </div>
+  );
+}
+
+function MediaView({ project, video, onFinalize, onSync, busy }) {
+  if (!video) return <EmptyState icon={LayoutGrid} title="Choose a video" description="Media is organized one video at a time." />;
+  const promptIds = new Set(video.prompt_ids || []);
+  const media = studioApi.getProjectGalleryItems(project).items.filter((item) => promptIds.has(item.prompt_id));
+  const folderInput = useRef(null);
+  return (
+    <div className="view-stack">
+      <PageHeader title="Media" description={video.display_name} actions={<><Button variant="outline" isDisabled={busy} onPress={() => folderInput.current?.click()}><FolderSync size={17} />Sync folder</Button><Button variant="primary" isDisabled={busy} onPress={onFinalize}>Finalize selected</Button><input ref={folderInput} type="file" hidden multiple webkitdirectory="" onChange={(event) => onSync(event.target.files)} /></>} />
+      {media.length ? <div className="media-grid">{media.map((item) => <Card key={`${item.type}:${item.id}`} className="media-card" variant="secondary"><Card.Content>{item.type === "video" && item.video_url ? <video controls preload="metadata" src={item.video_url} /> : item.preview_url ? <img src={item.preview_url} alt={studioApi.sceneTitleFromFileName(item.prompt_file_name)} /> : <span className="media-placeholder"><ImageIcon size={24} /></span>}<strong>{studioApi.sceneTitleFromFileName(item.prompt_file_name || item.output_file_name)}</strong><Chip size="sm" color={statusColor(item.is_selected ? "complete" : "draft")} variant="soft">{item.status_label}</Chip></Card.Content></Card>)}</div> : <EmptyState icon={LayoutGrid} title="No media yet" description="Selected images and completed videos appear here." />}
+    </div>
+  );
+}
+
+function LogsView({ logs, onClear }) {
+  const [query, setQuery] = useState("");
+  const filtered = logs.filter((entry) => !query || String(entry.message || "").toLowerCase().includes(query.toLowerCase()));
+  return (
+    <div className="view-stack">
+      <PageHeader title="Logs" description="Recent Studio and generation activity." actions={<Button variant="ghost" onPress={onClear}>Clear</Button>} />
+      <label className="search-box"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search logs" /></label>
+      {filtered.length ? <div className="log-list">{filtered.slice().reverse().map((entry) => <div className={`log-row log-${entry.type}`} key={entry.id}><span>{entry.time || ""}</span><Chip size="sm" color={statusColor(entry.type === "error" ? "failed" : entry.type === "warn" ? "paused" : "draft")} variant="soft">{entry.type}</Chip><p>{entry.message}</p></div>)}</div> : <EmptyState icon={Activity} title="No matching logs" />}
+    </div>
+  );
+}
+
+function StudioApp() {
+  const [snapshot, setSnapshot] = useState(() => captureStudioState());
+  const [view, setView] = useState("channels");
+  const [activeVideoId, setActiveVideoId] = useState("");
+  const [busy, setBusy] = useState("");
+  const [dialog, setDialog] = useState(null);
+  const [runner, setRunner] = useState({ status: "idle", videoId: "", currentJobId: "", error: "" });
+  const runnerRef = useRef(runner);
+  const runNextRef = useRef(null);
+
+  const capture = useCallback(() => setSnapshot(captureStudioState()), []);
+  const refresh = useCallback(async () => {
+    await studioApi.loadProjectState();
+    capture();
+  }, [capture]);
+
+  useEffect(() => {
+    refresh().catch((error) => toast.danger(error.message));
+    const storageListener = (changes, areaName) => {
+      if (areaName === "local" && (changes[domainApi.STORAGE_KEY] || changes.flowAutoLogs)) {
+        refresh().catch(() => {});
+      }
+    };
+    chrome.storage?.onChanged?.addListener(storageListener);
+    return () => chrome.storage?.onChanged?.removeListener(storageListener);
+  }, [refresh]);
+
+  const project = snapshot.activeProject;
+  const projects = snapshot.domainState?.projects || [];
+  const videos = useMemo(() => (project ? studioApi.getProjectVideos(project) : []), [project]);
+  const activeVideo = videos.find((video) => video.video_id === activeVideoId) || videos[0] || null;
+
+  useEffect(() => {
+    if (!activeVideoId || !videos.some((video) => video.video_id === activeVideoId)) {
+      setActiveVideoId(videos[0]?.video_id || "");
+    }
+  }, [videos, activeVideoId]);
+
+  const setRunnerState = useCallback((next) => {
+    const value = typeof next === "function" ? next(runnerRef.current) : next;
+    runnerRef.current = value;
+    setRunner(value);
+  }, []);
+
+  const pauseRunner = useCallback(async (error) => {
+    const message = String(error?.message || error || "Video generation failed.");
+    setRunnerState((current) => ({ ...current, status: "paused", currentJobId: "", error: message }));
+    await studioApi.appendStudioLog(`Video queue paused: ${message}`, "error");
+    capture();
+    toast.danger("Video queue paused", { description: message });
+  }, [capture, setRunnerState]);
+
+  const runNext = useCallback(async (videoId) => {
+    try {
+      await studioApi.loadProjectState();
+      let currentProject = studioApi.getState().activeProject;
+      let items = studioApi.getVideoQueueItems(currentProject, videoId).filter((item) => !!item.animation_prompt);
+      for (const item of items) {
+        if (item.status === "draft" && item.selected_variant_id) {
+          await studioApi.queuePromptVideo(item.prompt_id);
+        }
+      }
+      await studioApi.loadProjectState();
+      currentProject = studioApi.getState().activeProject;
+      items = studioApi.getVideoQueueItems(currentProject, videoId).filter((item) => !!item.animation_prompt);
+      const next = items.find((item) => item.status === "failed") || items.find((item) => item.status === "ready");
+      if (!next) {
+        setRunnerState({ status: "idle", videoId, currentJobId: "", error: "" });
+        capture();
+        toast.success("Video queue complete");
+        return;
+      }
+      const job = await studioApi.runVideoJob(next.job_id);
+      setRunnerState({ status: "running", videoId, currentJobId: job.job_id, error: "" });
+      capture();
+    } catch (error) {
+      await pauseRunner(error);
+    }
+  }, [capture, pauseRunner, setRunnerState]);
+  runNextRef.current = runNext;
+
+  useEffect(() => {
+    const runtimeListener = (message) => {
+      if (message?.type !== "FROM_BACKGROUND") return;
+      studioApi.handleVideoRuntimeMessage(message).then(async (updated) => {
+        if (updated) capture();
+        const current = runnerRef.current;
+        if (!current.currentJobId || message.uiBatchId !== current.currentJobId) return;
+        if (message.subType === "PROMPT_STATUS" && message.status === "failed") {
+          await pauseRunner(message.error || "Video generation failed.");
+          return;
+        }
+        const complete =
+          (message.subType === "PREVIEW_READY" && message.mediaType === "video") ||
+          (message.subType === "PROMPT_STATUS" && message.status === "submitted");
+        if (!complete) return;
+        const shouldContinue = current.status === "running";
+        setRunnerState((value) => ({ ...value, currentJobId: "" }));
+        if (shouldContinue) await runNextRef.current?.(current.videoId);
+      }).catch((error) => toast.danger(error.message));
+    };
+    chrome.runtime?.onMessage?.addListener(runtimeListener);
+    return () => chrome.runtime?.onMessage?.removeListener(runtimeListener);
+  }, [capture, pauseRunner, setRunnerState]);
+
+  async function action(key, task, successMessage) {
+    setBusy(key);
+    try {
+      const result = await task();
+      capture();
+      if (successMessage) toast.success(successMessage);
+      return result;
+    } catch (error) {
+      toast.danger(error.message || String(error));
+      throw error;
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function selectProject(projectId) {
+    await action("project", () => studioApi.setActiveProject(projectId));
+    setActiveVideoId("");
+  }
+
+  async function addChannel(name) {
+    const result = await action("channel-add", () => domainApi.createProject({ display_name: name }), "Channel added");
+    await studioApi.setActiveProject(result.project.project_id);
+    capture();
+    setDialog(null);
+  }
+
+  async function importVideo(file, name) {
+    const content = await studioApi.readTextFile(file);
+    const result = await action("video-import", () => studioApi.importProjectPromptJson(content, file.name, name), "Video imported");
+    setActiveVideoId(result.import_record.import_id);
+    setDialog(null);
+    return result;
+  }
+
+  const modal = dialog?.type;
+  const currentVideo = dialog?.video || null;
+  const currentAsset = dialog?.asset || null;
+
+  let content = null;
+  if (view === "channels") {
+    content = <ChannelsView project={project} videos={videos} busy={!!busy} onAddChannel={() => setDialog({ type: "channel-add" })} onRenameChannel={(name) => action("channel-rename", () => studioApi.updateActiveProject({ display_name: name }), "Channel renamed")} onAddVideo={() => setDialog({ type: "video-add" })} onOpenVideo={(videoId) => { setActiveVideoId(videoId); setView("images"); }} onRenameVideo={(video) => setDialog({ type: "video-rename", video })} onDeleteVideo={(video) => setDialog({ type: "video-delete", video })} />;
+  } else if (view === "assets") {
+    content = <AssetsView project={project} onAdd={() => setDialog({ type: "asset-add" })} onEdit={(asset) => setDialog({ type: "asset-edit", asset })} onDelete={(asset) => setDialog({ type: "asset-delete", asset })} />;
+  } else if (view === "import") {
+    content = <ImportView project={project} videos={videos} busy={!!busy} onImport={importVideo} onResolve={(promptId, referenceIndex, assetId) => action("resolve", () => studioApi.mapPromptReferenceToAsset(promptId, referenceIndex, assetId), "Reference resolved")} />;
+  } else if (view === "images") {
+    content = <ImageReviewView project={project} video={activeVideo} onSelect={(promptId, variantId) => action("select-image", () => studioApi.selectImageVariant(promptId, variantId), "Image selected")} />;
+  } else if (view === "video") {
+    content = <VideoQueueView project={project} video={activeVideo} runner={runner} onRunAll={() => { const next = { status: "running", videoId: activeVideo.video_id, currentJobId: "", error: "" }; setRunnerState(next); runNext(activeVideo.video_id); }} onPause={() => setRunnerState((current) => ({ ...current, status: "paused", error: "Paused after the current job." }))} onContinue={() => { setRunnerState((current) => ({ ...current, status: "running", error: "" })); runNext(activeVideo.video_id); }} onQueue={(promptId) => action("queue", () => studioApi.queuePromptVideo(promptId), "Added to queue")} onRun={(jobId) => action("run", () => studioApi.runVideoJob(jobId), "Video started")} onStop={(jobId) => action("stop", () => studioApi.stopVideoJob(jobId), "Video stopped")} onRemove={(jobId) => action("remove", () => studioApi.removeVideoJob(jobId), "Removed from queue")} onOpenImages={() => setView("images")} />;
+  } else if (view === "media") {
+    content = <MediaView project={project} video={activeVideo} busy={!!busy} onFinalize={() => action("finalize", () => studioApi.finalizeSelectedImages(), "Selected images finalized")} onSync={(files) => action("sync", () => studioApi.syncProjectMediaFromFiles(files), "Folder synced")} />;
+  } else {
+    content = <LogsView logs={snapshot.logs} onClear={() => action("clear-logs", () => studioApi.clearStudioLogs(), "Logs cleared")} />;
+  }
+
+  return (
+    <Toast.Provider placement="top-end">
+      <div className="studio-shell">
+        <aside className="studio-sidebar">
+          <div className="studio-brand"><span className="brand-symbol"><Video size={20} /></span><div><strong>AutoFlow</strong><span>Studio</span></div></div>
+          <nav>{NAV_ITEMS.map((item) => { const Icon = item.icon; return <button key={item.id} type="button" className={`studio-nav-item ${view === item.id ? "active" : ""}`} onClick={() => setView(item.id)} title={item.label}><Icon size={18} /><span>{item.label}</span></button>; })}</nav>
+        </aside>
+        <div className="studio-main">
+          <header className="studio-toolbar">
+            <div className="toolbar-selectors">
+              <label><span>YouTube channel</span><select value={project?.project_id || ""} onChange={(event) => selectProject(event.target.value)} disabled={!projects.length}>{projects.length ? projects.map((item) => <option key={item.project_id} value={item.project_id}>{item.display_name}</option>) : <option value="">No channels</option>}</select></label>
+              <label><span>Video</span><select value={activeVideo?.video_id || ""} onChange={(event) => setActiveVideoId(event.target.value)} disabled={!videos.length}>{videos.length ? videos.map((item) => <option key={item.video_id} value={item.video_id}>{item.display_name}</option>) : <option value="">No videos</option>}</select></label>
+            </div>
+            <Button isIconOnly size="sm" variant="ghost" aria-label="Refresh Studio" onPress={() => refresh()}><RefreshCw size={17} /></Button>
+          </header>
+          <main className="studio-content">{snapshot.lastError ? <div className="fatal-banner"><AlertCircle size={18} />{snapshot.lastError.message}</div> : content}</main>
+        </div>
+      </div>
+
+      <ChannelDialog open={modal === "channel-add"} onOpenChange={(open) => !open && setDialog(null)} busy={busy === "channel-add"} onSave={addChannel} />
+      <VideoDialog open={modal === "video-add" || modal === "video-rename"} mode={modal === "video-rename" ? "rename" : "add"} video={currentVideo} onOpenChange={(open) => !open && setDialog(null)} busy={busy === "video-import" || busy === "video-rename"} onSave={({ name, file }) => modal === "video-rename" ? action("video-rename", () => studioApi.renameProjectVideo(currentVideo.video_id, name), "Video renamed").then(() => setDialog(null)) : importVideo(file, name)} />
+      <AssetDialog open={modal === "asset-add" || modal === "asset-edit"} mode={modal === "asset-edit" ? "edit" : "add"} asset={currentAsset} onOpenChange={(open) => !open && setDialog(null)} busy={busy === "asset-save"} onSave={({ name, file }) => action("asset-save", async () => { if (modal === "asset-add") return studioApi.createAssetWithFile({ display_name: name }, [file]); await studioApi.updateAsset(currentAsset.asset_id, { display_name: name }); if (file) await studioApi.replaceAssetFile(currentAsset.asset_id, [file]); }, "Asset saved").then(() => setDialog(null))} />
+      <ConfirmDialog open={modal === "asset-delete"} title="Delete asset?" description={`Delete ${currentAsset?.display_name || "this asset"}? Scenes using it will return to Needs Reference.`} onOpenChange={(open) => !open && setDialog(null)} busy={busy === "asset-delete"} onConfirm={() => action("asset-delete", () => studioApi.deleteAsset(currentAsset.asset_id), "Asset deleted").then(() => setDialog(null))} />
+      <ConfirmDialog open={modal === "video-delete"} title="Delete video?" description={`Delete ${currentVideo?.display_name || "this video"} and its scenes, generated images, and video jobs?`} onOpenChange={(open) => !open && setDialog(null)} busy={busy === "video-delete"} onConfirm={() => action("video-delete", () => studioApi.deleteProjectVideo(currentVideo.video_id), "Video deleted").then(() => { setActiveVideoId(""); setDialog(null); })} />
+    </Toast.Provider>
+  );
+}
+
+const container = document.getElementById("studio-root");
+if (!container) throw new Error("Studio root is missing.");
+createRoot(container).render(<StudioErrorBoundary><StudioApp /></StudioErrorBoundary>);

@@ -1,0 +1,236 @@
+/* Minimal Generate surface. Loaded last to hide the old control scaffolding. */
+#tab-generate > .section:not(#stop-section):not(#progress-section),
+#tab-generate > #image-settings,
+#tab-generate > #video-settings,
+#tab-generate > .divider,
+#tab-generate > #mapping-preview-section {
+  display: none !important;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.speed-select-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 7px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: #1e1f20;
+  color: #9aa0a6;
+}
+
+.speed-select-wrap .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.speed-select {
+  width: 74px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #e3e3e3;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.speed-select:disabled {
+  cursor: not-allowed;
+  color: #5f6368;
+}
+
+.speed-select option {
+  background: #2d2e30;
+  color: #e3e3e3;
+}
+
+.generate-body {
+  display: flex;
+  min-height: 420px;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#sidepanel-project-queue-summary,
+#btn-open-project-video-queue {
+  display: none !important;
+}
+
+.json-entry,
+.json-summary {
+  border-radius: 8px;
+  background: #1e1f20;
+}
+
+.json-entry {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px dashed rgba(168, 199, 250, 0.32);
+}
+
+.json-entry[aria-disabled="true"] {
+  border-color: rgba(255, 255, 255, 0.1);
+  opacity: 0.72;
+}
+
+.json-entry-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.json-entry-main > .material-symbols-outlined {
+  color: #a8c7fa;
+}
+
+.json-entry-title,
+.json-summary-title {
+  color: #e3e3e3;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.json-entry-status,
+.json-summary-meta {
+  margin-top: 2px;
+  color: #9aa0a6;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.json-summary {
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.json-summary-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.json-summary-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.json-stat {
+  padding: 4px 8px;
+  border-radius: 100px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #c4c7c5;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.json-stat.ready {
+  background: rgba(52, 168, 83, 0.13);
+  color: #81c995;
+}
+
+.json-stat.blocked {
+  background: rgba(234, 67, 53, 0.13);
+  color: #f28b82;
+}
+
+.json-stat.animation {
+  background: rgba(168, 199, 250, 0.13);
+  color: #a8c7fa;
+}
+
+.blocked-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  color: #fdd663;
+  font-size: 11px;
+}
+
+.generate-form {
+  display: grid;
+  gap: 10px;
+}
+
+.generate-field,
+.compact-field {
+  display: grid;
+  align-items: center;
+  gap: 7px;
+}
+
+.generate-field {
+  grid-template-columns: 62px minmax(0, 1fr);
+}
+
+.compact-field {
+  grid-template-columns: 50px minmax(0, 1fr);
+}
+
+.generate-field > span,
+.compact-field > span {
+  color: #9aa0a6;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.generate-control-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: 10px;
+}
+
+.variants-stepper {
+  display: grid;
+  grid-template-columns: 32px minmax(28px, 1fr) 32px;
+  align-items: center;
+  height: 36px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: #1e1f20;
+}
+
+.variants-stepper .btn-flow-icon {
+  width: 32px;
+  height: 34px;
+  border-radius: 0;
+}
+
+#variants-value {
+  text-align: center;
+  color: #e3e3e3;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.generate-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.generate-actions > button {
+  flex: 1;
+  min-height: 38px;
+  padding-inline: 10px;
+}
+
+#stop-section,
+#progress-section {
+  margin-top: 10px;
+}

@@ -40,7 +40,6 @@
   "manifest_version": 3,
   "name": "TurboFlow - Auto Veo & Nano Banana Pro on Google Flow",
   "permissions": [
-    "identity",
     "sidePanel",
     "scripting",
     "storage",

@@ -70,6 +70,39 @@ function tfQueuePromptEntries(e) {
     .map((e, t) => ({ prompt: e, index: t }))
     .filter(({ prompt: t, index: a }) => tfQueueKeepsBatchPrompt(e, t, a));
 }
+function tfRepairQueueMarkup(value) {
+  return globalThis.TFProjectDomain?.repairTextEncoding?.(value) || String(value || "");
+}
+function tfRemovePromptMapIndex(map, removedIndex) {
+  if (!map || typeof map !== "object" || Array.isArray(map)) return map;
+  const next = {};
+  Object.keys(map).forEach((key) => {
+    const index = Number(key);
+    if (!Number.isInteger(index) || index < 0) {
+      next[key] = map[key];
+    } else if (index < removedIndex) {
+      next[index] = map[key];
+    } else if (index > removedIndex) {
+      next[index - 1] = map[key];
+    }
+  });
+  return next;
+}
+function tfRemoveBatchPromptAt(batch, promptIndex) {
+  batch.prompts.splice(promptIndex, 1);
+  [
+    "perPromptAssetIds",
+    "perPromptIds",
+    "perPromptReferences",
+    "perPromptStartFrames",
+    "perPromptEndFrames",
+    "perPromptFileNames",
+  ].forEach((field) => {
+    if (batch.settings?.[field]) {
+      batch.settings[field] = tfRemovePromptMapIndex(batch.settings[field], promptIndex);
+    }
+  });
+}
 function tfQueueBatchHasVisibleItems(e) {
   return tfQueuePromptEntries(e).length > 0;
 }
@@ -130,7 +163,8 @@ function Sn() {
     a = [...l.batches].reverse().filter(tfQueueBatchHasVisibleItems);
   (Ln(),
     0 !== a.length
-      ? ((e.innerHTML = a
+      ? ((e.innerHTML = tfRepairQueueMarkup(
+          a
           .map((e) => {
             const a =
                 !t ||
@@ -175,9 +209,9 @@ function Sn() {
               };
               (c.push(a[e.settings.imageRatio] || "16:9"),
                 e.settings.imageCount > 1 &&
-                  c.push(`Ã—${e.settings.imageCount}`),
+                  c.push(`x${e.settings.imageCount}`),
                 e.settings.imageReferenceMediaIds?.length > 0 &&
-                  c.push(`ðŸ–¼ ${e.settings.imageReferenceMediaIds.length} ref`));
+                  c.push(`${e.settings.imageReferenceMediaIds.length} ref`));
             } else {
               c.push("Video");
               const t = {
@@ -192,24 +226,28 @@ function Sn() {
                 c.push("portrait" === e.settings.videoRatio ? "9:16" : "16:9"),
                 c.push(`${e.settings.videoDuration || 8}s`),
                 e.settings.videoCount > 1 &&
-                  c.push(`Ã—${e.settings.videoCount}`));
+                  c.push(`x${e.settings.videoCount}`));
             }
-            ("mapped" === e.settings.referenceMode && c.push("ðŸ“Ž mapped"),
-              "prompt" === e.settings.naming && c.push("ðŸ“ prompt-name"),
+            ("mapped" === e.settings.referenceMode && c.push("mapped refs"),
+              "prompt" === e.settings.naming && c.push("prompt name"),
               "prefix" === e.settings.naming &&
                 e.settings.namingPrefix &&
-                c.push(`ðŸ·ï¸ ${e.settings.namingPrefix}-`));
+                c.push(`${e.settings.namingPrefix}-`));
             const p =
                 e.prompts.length > 1 &&
                 e.prompts.every((t) => t.text === e.prompts[0].text),
               m =
                 !0 === e.settings.singlePromptBatch ||
                 (p && "mapped" === e.settings.referenceMode);
-            m && c.push(`ðŸ“ 1 prompt Ã— ${e.prompts.length} videos`);
+            m && c.push(`1 prompt x ${e.prompts.length} videos`);
             const u = "running" === e.status ? In(e) : null,
               g = "pending" === e.status,
               f = "pending" === e.status,
-              h = e.prompts.some((e) => "failed" === e.status),
+              h = e.prompts.some(
+                (prompt, promptIndex) =>
+                  "failed" === prompt.status ||
+                  tfQueuePromptIsMissingMedia(e, prompt, promptIndex),
+              ),
               b =
                 "running" !== e.status &&
                 "pending" !== e.status &&
@@ -227,16 +265,18 @@ function Sn() {
                           : `bps-${t.status}`;
                       let r =
                           {
-                            pending: "â³ Waiting",
-                            running: "âš¡ Generating",
-                            submitted: "âœ… Generated",
-                            failed: "âŒ Failed",
+                            pending: "Waiting",
+                            running: "Generating",
+                            submitted: "Generated",
+                            failed: "Failed",
                           }[t.status] || t.status;
                       const i = tfPromptFailureReason(t),
                         c = tfShortPromptFailure(t),
                         o = g ? "bp-editable" : "";
                       "failed" === t.status && c && (r = `Failed: ${c}`);
-                      tfQueuePromptIsMissingMedia(e, t, a) &&
+                      const missingMedia = tfQueuePromptIsMissingMedia(e, t, a);
+                      const retryable = "failed" === t.status || missingMedia;
+                      missingMedia &&
                         ((n = "bps-failed"), (r = "Missing media"));
                       let s = "";
                       if ("mapped" === e.settings.referenceMode)
@@ -262,12 +302,13 @@ function Sn() {
                                   : '<span class="bp-ref-icon">ðŸ–¼</span>';
                               })
                               .join(""));
-                      return `\n                <div class="bp-row" data-bid="${e.id}" data-pi="${a}">\n                    <span class="bp-num">${a + 1}.</span>\n                    ${s ? `<span class="bp-refs">${s}</span>` : ""}\n                    <span class="bp-text ${o}" data-bid="${e.id}" data-pi="${a}"\n                          title="${se(t.text)}">${se(t.text)}</span>\n                    <span class="bp-status ${n}" title="${se(i)}">${se(r)}</span>\n                    <div class="bp-actions">\n                        ${"failed" === t.status ? `\n                            <button class="bpa-btn" data-act="retry-prompt" data-bid="${e.id}" data-pi="${a}" title="Retry">\n                                <span class="material-symbols-outlined">refresh</span>\n                            </button>` : ""}\n                        ${g ? `\n                            <button class="bpa-btn bpa-danger" data-act="delete-prompt" data-bid="${e.id}" data-pi="${a}" title="Remove">\n                                <span class="material-symbols-outlined">close</span>\n                            </button>` : ""}\n                    </div>\n                </div>\n            `;
+                      return `\n                <div class="bp-row" data-bid="${e.id}" data-pi="${a}">\n                    <span class="bp-num">${a + 1}.</span>\n                    ${s ? `<span class="bp-refs">${s}</span>` : ""}\n                    <span class="bp-text ${o}" data-bid="${e.id}" data-pi="${a}"\n                          title="${se(t.text)}">${se(t.text)}</span>\n                    <span class="bp-status ${n}" title="${se(i)}">${se(r)}</span>\n                    <div class="bp-actions">\n                        ${retryable ? `\n                            <button class="bpa-btn" data-act="retry-prompt" data-bid="${e.id}" data-pi="${a}" title="Retry now">\n                                <span class="material-symbols-outlined">refresh</span>\n                            </button>` : ""}\n                        ${"running" !== e.status ? `\n                            <button class="bpa-btn bpa-danger" data-act="delete-prompt" data-bid="${e.id}" data-pi="${a}" title="Remove">\n                                <span class="material-symbols-outlined">close</span>\n                            </button>` : ""}\n                    </div>\n                </div>\n            `;
                     })
                     .join("");
             return `\n            <div class="batch-card ${e.collapsed ? "" : "expanded"} bc-${e.status} ${a}" data-bid="${e.id}">\n                <div class="batch-hdr" data-bid="${e.id}">\n                    <span class="material-symbols-outlined batch-chevron">chevron_right</span>\n                    <div class="batch-hdr-info">\n                        <div class="batch-hdr-top">\n                            <span class="batch-name-edit" contenteditable="${g}" spellcheck="false"\n                                  data-bid="${e.id}">${se(e.name)}</span>\n                            <span class="batch-count">${r}/${n}</span>\n                            <span class="bs-badge ${i}">${l}</span>\n                            ${u ? `<span class="batch-eta">${u}</span>` : ""}\n                        </div>\n                        <div class="batch-hdr-meta">\n                            ${c.map((e) => `<span class="batch-tag">${e}</span>`).join("")}\n                            <span class="batch-tag">ðŸ“ ${se(e.folder)}</span>\n                        </div>\n                    </div>\n                    <div class="batch-hdr-actions">\n                        ${"running" === e.status ? `\n                            <button class="ba-btn ba-danger" data-act="stop-batch" data-bid="${e.id}" title="Stop">\n                                <span class="material-symbols-outlined">stop_circle</span>\n                            </button>` : ""}\n                        ${f ? `\n                            <button class="ba-btn" data-act="run-batch" data-bid="${e.id}" title="Run now">\n                                <span class="material-symbols-outlined">play_arrow</span>\n                            </button>` : ""}\n                        <button class="ba-btn" data-act="duplicate-batch" data-bid="${e.id}" title="Duplicate">\n                            <span class="material-symbols-outlined">content_copy</span>\n                        </button>\n                        <button class="ba-btn ba-danger" data-act="delete-batch" data-bid="${e.id}" title="Delete">\n                            <span class="material-symbols-outlined">delete</span>\n                        </button>\n                    </div>\n                </div>\n\n                ${v ? `\n                    <div class="batch-progress">\n                        <div class="batch-pbar">\n                            <div class="batch-pfill ${d}" style="width:${s}%"></div>\n                        </div>\n                    </div>` : ""}\n\n                <div class="batch-body">\n                    <div class="bp-list">${y}</div>\n                    <div class="batch-footer">\n                        <div style="display:flex;gap:2px">\n                            ${h ? `\n                                <button class="bf-btn bf-primary" data-act="retry-failed" data-bid="${e.id}">\n                                    <span class="material-symbols-outlined">refresh</span>\n                                    Retry Failed\n                                </button>` : ""}\n                            ${b ? `\n                                <button class="bf-btn bf-primary" data-act="sweep-stuck" data-bid="${e.id}" title="Some items are stuck â€” mark them as failed so you can retry">\n                                    <span class="material-symbols-outlined">cleaning_services</span>\n                                    Sweep Stuck\n                                </button>` : ""}\n                        </div>\n                        <div style="display:flex;gap:2px">\n                            <button class="bf-btn" data-act="duplicate-batch" data-bid="${e.id}">\n                                <span class="material-symbols-outlined">content_copy</span>\n                                Clone\n                            </button>\n                            <button class="bf-btn bf-danger" data-act="delete-batch" data-bid="${e.id}">\n                                <span class="material-symbols-outlined">delete</span>\n                                Delete\n                            </button>\n                        </div>\n                    </div>\n                </div>\n            </div>\n        `;
           })
-          .join("")),
+          .join(""),
+        )),
         _n())
       : (e.innerHTML = tfQueueEmptyMarkup()));
 }
@@ -380,6 +421,28 @@ async function Pn(e, t, a, n = {}) {
         n.keepChain || (p = !1);
         if (!(await tfEnsureJsonAnimationFramesForBatch(o, { keepChain: n.keepChain })))
           return void (n.keepChain && (p = !1));
+        try {
+          await globalThis.tfPrepareStudioImageBatch?.(o);
+        } catch (error) {
+          Te(`Studio run tracking could not start: ${error.message}`, "warn");
+        }
+        try {
+          if (
+            typeof globalThis.tfEnsureProjectReferencesForBatch === "function" &&
+            !(await globalThis.tfEnsureProjectReferencesForBatch(o))
+          ) {
+            return void (n.keepChain && (p = !1));
+          }
+        } catch (error) {
+          Gn({
+            icon: "!",
+            title: "Reference Upload Failed",
+            message: se(error.message || "The prompt reference could not be uploaded."),
+            hint: "Check that Flow is open, then retry the batch.",
+          });
+          Te(`Reference upload failed: ${error.message}`, "error");
+          return void (n.keepChain && (p = !1));
+        }
         if (!(await tfEnsureJackReferenceForBatch(o)))
           return void (n.keepChain && (p = !1));
         const e = o.settings;
@@ -578,8 +641,8 @@ async function Pn(e, t, a, n = {}) {
                 endFrameMediaId: c.endFrameMediaId,
                 referenceMediaIds: c.referenceMediaIds,
                 imageReferenceMediaIds: c.imageReferenceMediaIds || [],
-                autoDownloadImages: r("#setting-autodownload-images").checked,
-                autoDownloadVideos: r("#setting-autodownload-videos").checked,
+                autoDownloadImages: !1,
+                autoDownloadVideos: !1,
                 imageDownloadQuality: l.settings.imageDownloadQuality || "2k",
                 videoDownloadQuality:
                   l.settings.videoDownloadQuality || "standard",
@@ -638,20 +701,21 @@ async function Pn(e, t, a, n = {}) {
         (wn(t), l.activeBatchId || Pn("run-batch", t, null, { keepChain: p }));
         break;
       case "retry-prompt":
-        null !== a &&
-          o.prompts[a] &&
-          ((o.prompts[a].status = "pending"),
-          delete o.prompts[a].lastError,
-          delete o.prompts[a].localSavedCount,
-          delete o.prompts[a].localExpectedCount,
-          delete o.prompts[a].localSavedKeys,
-          ("done" !== o.status &&
-            "partial" !== o.status &&
-            "failed" !== o.status) ||
-            ((o.status = "pending"), (o.completedAt = null)),
-          X(),
-          Sn(),
-          Te(`ðŸ”„ Prompt ${a + 1} in "${o.name}" reset for retry`, "info"));
+        if (null !== a && o.prompts[a]) {
+          o.prompts[a].status = "pending";
+          delete o.prompts[a].lastError;
+          delete o.prompts[a].localSavedCount;
+          delete o.prompts[a].localExpectedCount;
+          delete o.prompts[a].localSavedKeys;
+          if (["done", "partial", "failed"].includes(o.status)) {
+            o.status = "pending";
+            o.completedAt = null;
+          }
+          X();
+          Sn();
+          Te(`Prompt ${a + 1} in "${o.name}" queued for retry`, "info");
+          if (!l.activeBatchId) await Pn("run-batch", t);
+        }
         break;
       case "sweep-stuck": {
         let e = 0;
@@ -685,7 +749,7 @@ async function Pn(e, t, a, n = {}) {
       }
       case "delete-prompt":
         null !== a &&
-          (o.prompts.splice(a, 1),
+          (tfRemoveBatchPromptAt(o, a),
           0 === o.prompts.length
             ? Pn("delete-batch", t, null)
             : (X(), Sn(), Te(`ðŸ—‘ï¸ Prompt removed from "${o.name}"`, "info")));

@@ -171,8 +171,10 @@ function wn(e) {
   if (!t) return;
   let a = 0;
   if (
-    (t.prompts.forEach((e) => {
-      "failed" === e.status &&
+    (t.prompts.forEach((e, promptIndex) => {
+      ("failed" === e.status ||
+        (typeof tfQueuePromptIsMissingMedia === "function" &&
+          tfQueuePromptIsMissingMedia(t, e, promptIndex))) &&
         ((e.status = "pending"),
         delete e.lastError,
         delete e.localSavedCount,

@@ -1,4 +1,4 @@
-﻿// TurboFlow side panel shard: Announcements, logs, connection badge, local auth shell
+// TurboFlow side panel shard: Announcements, logs, connection badge, local auth shell
 // Loaded by src/sidepanel/index.html in numeric order.
 
 let Ee = null;
@@ -139,11 +139,68 @@ async function _e(e) {
   throw new Error(Ie(n || "Upload failed after 3 retries"));
 }
 const Pe = r("#log-list");
+const TF_STUDIO_LOG_KEY = "flowAutoLogs";
+const TF_STUDIO_LOG_LIMIT = 500;
+let TF_STUDIO_LOG_BUFFER = null;
+let TF_STUDIO_LOG_LOADING = false;
+let TF_STUDIO_LOG_PENDING = [];
 function Ae(e) {
   return "error" === e || "warn" === e ? "error" : "activity";
 }
+function flushStudioLogBuffer(e) {
+  if (!Array.isArray(TF_STUDIO_LOG_BUFFER) || !TF_STUDIO_LOG_PENDING.length) return;
+  TF_STUDIO_LOG_BUFFER = TF_STUDIO_LOG_BUFFER.concat(TF_STUDIO_LOG_PENDING).slice(
+    -TF_STUDIO_LOG_LIMIT,
+  );
+  TF_STUDIO_LOG_PENDING = [];
+  e.set({ [TF_STUDIO_LOG_KEY]: TF_STUDIO_LOG_BUFFER });
+}
+function persistStudioLog(e, t, a, n, o) {
+  const s = globalThis.chrome?.storage?.local;
+  if (!s || "function" != typeof s.get || "function" != typeof s.set) return;
+  const i = {
+    id: `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    message: String(e || ""),
+    type: String(t || "info"),
+    level: String(a || "user"),
+    category: String(n || "activity"),
+    time: String(o || ""),
+    created_at: new Date().toISOString(),
+  };
+  TF_STUDIO_LOG_PENDING.push(i);
+  if (Array.isArray(TF_STUDIO_LOG_BUFFER)) {
+    flushStudioLogBuffer(s);
+    return;
+  }
+  if (TF_STUDIO_LOG_LOADING) return;
+  TF_STUDIO_LOG_LOADING = true;
+  try {
+    s.get([TF_STUDIO_LOG_KEY], (e) => {
+      TF_STUDIO_LOG_LOADING = false;
+      if (globalThis.chrome?.runtime?.lastError) {
+        TF_STUDIO_LOG_BUFFER = [];
+        TF_STUDIO_LOG_PENDING = [];
+        return;
+      }
+      TF_STUDIO_LOG_BUFFER = Array.isArray(e?.[TF_STUDIO_LOG_KEY])
+        ? e[TF_STUDIO_LOG_KEY].slice(-TF_STUDIO_LOG_LIMIT)
+        : [];
+      flushStudioLogBuffer(s);
+    });
+  } catch (e) {
+    TF_STUDIO_LOG_LOADING = false;
+  }
+}
+globalThis.chrome?.storage?.onChanged?.addListener?.((e, t) => {
+  if ("local" !== t || !e?.[TF_STUDIO_LOG_KEY]) return;
+  TF_STUDIO_LOG_BUFFER = Array.isArray(e[TF_STUDIO_LOG_KEY].newValue)
+    ? e[TF_STUDIO_LOG_KEY].newValue.slice(-TF_STUDIO_LOG_LIMIT)
+    : [];
+  TF_STUDIO_LOG_PENDING = [];
+});
 function Te(e, t = "info", a = "user") {
   if ("debug" === a && !A) return;
+  e = globalThis.TFProjectDomain?.repairTextEncoding?.(e) || String(e || "");
   const n = new Date().toLocaleTimeString([], {
       hour: "2-digit",
       minute: "2-digit",
@@ -151,6 +208,7 @@ function Te(e, t = "info", a = "user") {
     }),
     o = document.createElement("div"),
     s = Ae(t);
+  persistStudioLog(e, t, a, s, n);
   ((o.className = `log-entry log-${t}`),
     (o.dataset.logCategory = s),
     (o.dataset.logLevel = a),
@@ -198,6 +256,9 @@ function Re(e) {
 (r("#btn-clear-logs").addEventListener("click", () => {
   ((Pe.innerHTML = ""),
     (_ = { all: 0, errors: 0, activity: 0 }),
+    (TF_STUDIO_LOG_BUFFER = []),
+    (TF_STUDIO_LOG_PENDING = []),
+    globalThis.chrome?.storage?.local?.set?.({ [TF_STUDIO_LOG_KEY]: [] }),
     Ce(),
     Te("Logs cleared", "info"));
 }),
@@ -349,17 +410,17 @@ async function Oe() {
           ? a ||
             Gn({
               icon: "ðŸ“‚",
-              title: "No Project Open",
+              title: "No Flow Project Open",
               message:
-                "Flow is open but you need to <strong>create or open a project</strong> first.",
-              hint: 'Go to your Flow tab and create a new project or open an existing one. The status badge will update to "Connected" automatically.',
+                "Flow is open, but you need to <strong>create or open a Flow project</strong> first.",
+              hint: 'Go to your Flow tab and create a new Flow project or open an existing one. The status badge will update to "Connected" automatically.',
             })
           : Gn({
               icon: "ðŸ”Œ",
               title: "Not Connected to Flow",
               message:
                 "You need an open <strong>Google Flow</strong> tab to generate images.",
-              hint: '<strong>Step 1:</strong> Open <a href="https://labs.google/fx/tools/flow" target="_blank" style="color:#a8c7fa">labs.google/fx/tools/flow</a><br>\n                           <strong>Step 2:</strong> Sign in with Google if Flow asks<br>\n                           <strong>Step 3:</strong> Create or open a project<br>\n                           <strong>Step 4:</strong> Wait for the status badge to show "Connected"',
+              hint: '<strong>Step 1:</strong> Open <a href="https://labs.google/fx/tools/flow" target="_blank" style="color:#a8c7fa">labs.google/fx/tools/flow</a><br>\n                           <strong>Step 2:</strong> Sign in with Google if Flow asks<br>\n                           <strong>Step 3:</strong> Create or open a Flow project<br>\n                           <strong>Step 4:</strong> Wait for the status badge to show "Connected"',
             }),
         !1
       );
@@ -533,17 +594,10 @@ const Be = r("#auth-screen"),
   je = r("#main-app"),
   Ge = document.getElementById("loading-screen");
 async function He() {
-  try {
-    const e = await chrome.runtime.sendMessage({ type: "GET_AUTH_STATE" });
-    e?.user ? ((s = e.user), (i = e.plan || LOCAL_PLAN), We()) : Qe();
-  } catch (e) {
-    Qe();
-  }
+  Qe();
 }
 function Qe() {
-  (Ge && (Ge.style.display = "none"),
-    Be && (Be.style.display = "block"),
-    je && (je.style.display = "none"));
+  ((s = LOCAL_USER), (i = LOCAL_PLAN), We());
 }
 function We() {
   s = s || LOCAL_USER;
@@ -553,9 +607,10 @@ function We() {
   je && (je.style.display = "block");
   Ve();
   Ye();
-  at().then((e) => {
-    e && setTimeout(() => rt(), 500);
-  });
+  // Tour popup disabled by user preference.
+  // at().then((e) => {
+  //   e && setTimeout(() => rt(), 500);
+  // });
 }
 function Ve() {
   const e = r("#plan-banner"),
@@ -592,31 +647,11 @@ function Ye() {
       },
     ));
 }
-(r("#btn-google-signin")?.addEventListener("click", async () => {
-  const e = me(),
-    t = r("#btn-google-signin"),
-    a = t?.innerHTML || "";
-  t &&
-    ((t.disabled = !0),
-    (t.innerHTML = '<div class="uploading-spinner"></div> Signing in...'));
-  try {
-    const t = await chrome.runtime.sendMessage({
-      type: "SIGN_IN",
-      fingerprint: e,
-    });
-    t?.ok
-      ? ((s = t.user), (i = t.plan || LOCAL_PLAN), We())
-      : alert("Sign in failed: " + (t?.error || "Unknown error"));
-  } catch (e) {
-    alert("Sign in error: " + e.message);
-  }
-  t && ((t.disabled = !1), (t.innerHTML = a));
-}),
-  r("#btn-sign-out")?.addEventListener("click", async () => {
+(r("#btn-sign-out")?.addEventListener("click", async () => {
     (await chrome.runtime.sendMessage({ type: "SIGN_OUT" }),
-      (s = null),
-      (i = null),
-      Qe());
+      (s = LOCAL_USER),
+      (i = LOCAL_PLAN),
+      We());
   }),
   r("#btn-upgrade")?.addEventListener("click", () => {}),
   r("#btn-close-upgrade")?.addEventListener("click", () => {}),

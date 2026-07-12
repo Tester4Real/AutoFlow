@@ -1,4 +1,4 @@
-// TurboFlow side panel shard: Project Studio entry point.
+// TurboFlow side panel shard: Channel Studio entry point.
 // Loaded by src/sidepanel/index.html after shared side panel helpers.
 (function initProjectStudioLink(root) {
   "use strict";
@@ -23,7 +23,7 @@
       const lastError = root.chrome?.runtime?.lastError;
       button.disabled = false;
       if (lastError) {
-        root.console.warn("Project Studio open failed:", lastError.message);
+        root.console.warn("Channel Studio open failed:", lastError.message);
       }
     });
   }

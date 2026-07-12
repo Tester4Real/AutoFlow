@@ -33,6 +33,12 @@ function jn(e) {
       Array(t.length).fill(e[0]));
 }
 function Gn({ icon: e, title: t, message: a, hint: n }) {
+  const repair = (value) =>
+    globalThis.TFProjectDomain?.repairTextEncoding?.(value) || String(value || "");
+  e = repair(e);
+  t = repair(t);
+  a = repair(a);
+  n = repair(n);
   const o = r("#validation-modal"),
     s = r("#validation-icon"),
     i = r("#validation-title"),
@@ -47,7 +53,7 @@ function Gn({ icon: e, title: t, message: a, hint: n }) {
   function m(e) {
     e.target === o && p();
   }
-  ((s.textContent = e || "âš ï¸"),
+  ((s.textContent = e || "Warning"),
     (i.textContent = t || "Can't Generate Yet"),
     (l.innerHTML = a || ""),
     n
@@ -322,8 +328,8 @@ function Yn() {
                   endFrameMediaId: n.endFrameMediaId,
                   referenceMediaIds: n.referenceMediaIds,
                   imageReferenceMediaIds: n.imageReferenceMediaIds || [],
-                  autoDownloadImages: r("#setting-autodownload-images").checked,
-                  autoDownloadVideos: r("#setting-autodownload-videos").checked,
+                  autoDownloadImages: !1,
+                  autoDownloadVideos: !1,
                   imageDownloadQuality: l.settings.imageDownloadQuality || "2k",
                   videoDownloadQuality:
                     l.settings.videoDownloadQuality || "standard",

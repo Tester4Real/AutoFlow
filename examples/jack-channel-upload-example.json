@@ -1,0 +1,28 @@
+{
+  "prompts": [
+    {
+      "file_name": "jack_channel_scene_001.png",
+      "image_prompt": "Jack, the same young blond cartoon character wearing a dark hoodie, light gray pants, and black-and-white sneakers, sitting at a small desk at night with a glowing laptop, thoughtful expression, clean 2D animated finance storytelling style, soft cinematic lighting, 16:9",
+      "animation_prompt": "Slow push-in toward Jack as the laptop glow flickers on his face and city lights move softly outside the window.",
+      "references": ["Jack"]
+    },
+    {
+      "file_name": "jack_channel_scene_002.png",
+      "image_prompt": "Jack walking through a busy city street in the morning, same hoodie, same hairstyle, same friendly face, holding a notebook and looking determined, clean 2D animated finance storytelling style, warm sunlight, 16:9",
+      "animation_prompt": "Camera tracks beside Jack as people move in the background and sunlight passes across the street.",
+      "references": ["Jack"]
+    },
+    {
+      "file_name": "jack_channel_scene_003.png",
+      "image_prompt": "Jack sitting at a modern desk with financial charts on a monitor, coffee cup and notebook nearby, calm confident expression, same character design, clean 2D animated finance storytelling style, 16:9",
+      "animation_prompt": "Subtle desk-level camera slide while the charts glow softly and Jack looks from the notebook to the monitor.",
+      "references": ["Jack"]
+    },
+    {
+      "file_name": "jack_channel_scene_004.png",
+      "image_prompt": "Jack standing in front of a simple whiteboard explaining a money concept with arrows and dollar signs, same blond cartoon character design, confident but friendly expression, clean 2D animated finance storytelling style, bright studio lighting, 16:9",
+      "animation_prompt": "Gentle camera push-in as Jack points at the whiteboard and the arrows lightly animate.",
+      "references": ["Jack"]
+    }
+  ]
+}

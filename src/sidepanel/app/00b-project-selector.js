@@ -1,4 +1,4 @@
-// TurboFlow side panel shard: active Project selector.
+// TurboFlow side panel shard: active Channel selector.
 // Loaded by src/sidepanel/index.html after shared side panel helpers.
 (function initSidePanelProjectSelector(root) {
   "use strict";
@@ -25,7 +25,7 @@
   }
 
   function projectName(project) {
-    return project?.display_name || project?.name || "Untitled Project";
+    return project?.display_name || project?.name || "Untitled Channel";
   }
 
   function resolveActiveProject(domainState) {
@@ -118,7 +118,7 @@
         counts[status]++;
       }
       if (!alert && status === "failed") {
-        alert = job.error_message || "Video job failed; retry from Project Studio.";
+        alert = job.error_message || "Video job failed; retry from Channel Studio.";
       }
     });
     if (!alert && jobs.length && !project.current_flow_context_id) {
@@ -145,7 +145,7 @@
     if (!summary) return;
 
     if (!project) {
-      summary.innerHTML = '<span class="project-queue-chip muted">Queue: no active Project</span>';
+      summary.innerHTML = '<span class="project-queue-chip muted">Queue: no active Channel</span>';
       if (videoButton) videoButton.disabled = true;
       return;
     }
@@ -167,7 +167,7 @@
             )}</span>`;
           })
           .join("")
-      : '<span class="project-queue-chip muted">Queue: no project work</span>';
+      : '<span class="project-queue-chip muted">Queue: no channel work</span>';
 
     if (alert) {
       summary.innerHTML += `<span class="project-queue-alert">${escapeHtml(alert)}</span>`;
@@ -192,11 +192,6 @@
     } catch (error) {}
   }
 
-  function nextProjectName() {
-    const count = projects().length + 1;
-    return count === 1 ? "Untitled Project" : `Untitled Project ${count}`;
-  }
-
   function render() {
     const picker = query("#sidepanel-project-picker");
     const createButton = query("#btn-create-sidepanel-project");
@@ -205,25 +200,25 @@
     if (!picker) return;
 
     if (selectorState.lastError) {
-      picker.innerHTML = '<option value="">Project unavailable</option>';
+      picker.innerHTML = '<option value="">Channel unavailable</option>';
       picker.disabled = true;
       if (createButton) createButton.disabled = true;
-      setStatus(selectorState.lastError.message || "Project unavailable", "danger");
+      setStatus(selectorState.lastError.message || "Channel unavailable", "danger");
       renderQueueSummary();
       return;
     }
 
     if (!list.length) {
-      picker.innerHTML = '<option value="">No project</option>';
+      picker.innerHTML = '<option value="">No channel</option>';
       picker.disabled = true;
-      if (createButton) createButton.disabled = false;
-      setStatus("No active Project", "warning");
+      if (createButton) createButton.disabled = _creatingProject || _queuedCreateProject;
+      setStatus("No active Channel", "warning");
       renderQueueSummary();
       return;
     }
 
     picker.disabled = false;
-    if (createButton) createButton.disabled = false;
+    if (createButton) createButton.disabled = _creatingProject || _queuedCreateProject;
     picker.innerHTML = list
       .map((project) => {
         const id = escapeHtml(project.project_id);
@@ -234,18 +229,56 @@
     picker.value = selectorState.activeProject?.project_id || "";
 
     const count = list.length;
-    const suffix = count === 1 ? "Project" : "Projects";
-    setStatus(`${projectName(selectorState.activeProject)} · ${count} ${suffix}`);
+    const suffix = count === 1 ? "Channel" : "Channels";
+    setStatus(`${projectName(selectorState.activeProject)} - ${count} ${suffix}`);
     renderQueueSummary();
   }
 
+  let _creatingProject = false;
+  let _loadingInProgress = false;
+  let _projectStateVersion = 0;
+  let _queuedCreateProject = false;
+  let _queuedLoadReason = "";
+
+  function queueProjectLoad(reason) {
+    _queuedLoadReason = reason || _queuedLoadReason || "storage";
+  }
+
+  function flushQueuedProjectLoad() {
+    if (_loadingInProgress || _creatingProject) return;
+    if (_queuedCreateProject) {
+      _queuedCreateProject = false;
+      root.setTimeout(() => {
+        createProject();
+      }, 0);
+      return;
+    }
+    if (!_queuedLoadReason) return;
+    const reason = _queuedLoadReason;
+    _queuedLoadReason = "";
+    root.setTimeout(() => {
+      loadProjects(reason);
+    }, 0);
+  }
+
   async function loadProjects(reason) {
+    if (_loadingInProgress || _creatingProject) {
+      queueProjectLoad(reason);
+      return;
+    }
+    _loadingInProgress = true;
+    const readVersion = _projectStateVersion;
     try {
       const domain = getDomain();
       if (!domain || typeof domain.load !== "function") {
-        throw new Error("Project domain unavailable.");
+        throw new Error("Channel storage unavailable.");
       }
-      selectorState.domainState = await domain.load();
+      const domainState = await domain.load();
+      if (readVersion !== _projectStateVersion || _creatingProject) {
+        queueProjectLoad(reason);
+        return;
+      }
+      selectorState.domainState = domainState;
       selectorState.activeProject = resolveActiveProject(selectorState.domainState);
       selectorState.lastError = null;
       render();
@@ -253,18 +286,33 @@
     } catch (error) {
       selectorState.lastError = error;
       render();
+    } finally {
+      _loadingInProgress = false;
+      flushQueuedProjectLoad();
     }
   }
 
   async function createProject() {
+    if (_creatingProject || _queuedCreateProject) return;
+    if (_loadingInProgress) {
+      _queuedCreateProject = true;
+      const createButton = query("#btn-create-sidepanel-project");
+      if (createButton) createButton.disabled = true;
+      return;
+    }
+    _creatingProject = true;
+    _queuedLoadReason = "";
+    _projectStateVersion += 1;
+    const createButton = query("#btn-create-sidepanel-project");
     try {
+      if (createButton) createButton.disabled = true;
       const domain = getDomain();
       if (!domain || typeof domain.createProject !== "function") {
-        throw new Error("Project domain unavailable.");
+        throw new Error("Channel storage unavailable.");
       }
-      const result = await domain.createProject({ display_name: nextProjectName() });
+      const result = await domain.createProject();
       if (!result || !result.ok) {
-        throw new Error(result?.error?.message || "Project creation failed.");
+        throw new Error(result?.error?.message || "Channel creation failed.");
       }
       selectorState.domainState = result.state;
       selectorState.activeProject = resolveActiveProject(result.state);
@@ -274,6 +322,10 @@
     } catch (error) {
       selectorState.lastError = error;
       render();
+    } finally {
+      _creatingProject = false;
+      if (createButton) createButton.disabled = false;
+      flushQueuedProjectLoad();
     }
   }
 
@@ -287,7 +339,7 @@
     if (
       hasActiveWork() &&
       !root.confirm(
-        "Switch Projects? Current queue work will keep running, but this panel may show a different Project view.",
+        "Switch Channels? Current queue work will keep running, but this panel may show a different Channel view.",
       )
     ) {
       render();
@@ -295,13 +347,14 @@
     }
 
     try {
+      _projectStateVersion += 1;
       const domain = getDomain();
       if (!domain || typeof domain.setActiveProject !== "function") {
-        throw new Error("Project domain unavailable.");
+        throw new Error("Channel storage unavailable.");
       }
       const result = await domain.setActiveProject(projectId);
       if (!result || !result.ok) {
-        throw new Error(result?.error?.message || "Project switch failed.");
+        throw new Error(result?.error?.message || "Channel switch failed.");
       }
       selectorState.domainState = result.state;
       selectorState.activeProject = resolveActiveProject(result.state);
@@ -324,6 +377,10 @@
     root.chrome?.storage?.onChanged?.addListener?.((changes, areaName) => {
       const storageKey = root.TFProjectDomain?.STORAGE_KEY;
       if (areaName === "local" && storageKey && changes[storageKey]) {
+        if (_creatingProject) {
+          queueProjectLoad("storage");
+          return;
+        }
         loadProjects("storage");
       }
     });

@@ -51,7 +51,8 @@
         !0
       );
     if ("SIGN_OUT" === e.type) return (Te().then(() => r({ ok: !0 })), !0);
-    if ("GET_AUTH_STATE" === e.type) return (r({ user: i, plan: s }), !0);
+    if ("GET_AUTH_STATE" === e.type)
+      return (r({ user: i || LOCAL_USER, plan: s || LOCAL_PLAN }), !0);
     if ("GET_PLAN" === e.type)
       return (s ? r({ plan: s }) : Se().then((e) => r({ plan: e })), !0);
     if ("REFRESH_PLAN" === e.type)

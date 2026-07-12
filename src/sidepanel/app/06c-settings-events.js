@@ -1,4 +1,4 @@
-﻿// TurboFlow shard: Control tab event bindings, settings controls, start/stop handlers
+// TurboFlow shard: Control tab event bindings, settings controls, start/stop handlers
 // Loaded in numeric order; depends on earlier shards sharing globals.
 
 (Tn.addEventListener("input", Hn),
@@ -173,9 +173,11 @@
     const t = e.target.files[0];
     if (!t) return;
     const a = new FileReader();
-    ((a.onload = (e) => {
+    ((a.onload = async (e) => {
       try {
-        tfImportPromptIndexJson(e.target.result, t.name);
+        if ("function" == typeof tfHandleGenerateJsonFile)
+          await tfHandleGenerateJsonFile(e.target.result, t.name);
+        else await tfImportPromptIndexJson(e.target.result, t.name);
       } catch (e) {
         Te(`JSON import failed: ${e.message}`, "error");
       }
@@ -866,8 +868,8 @@
           endFrameMediaId: a.endFrameMediaId,
           referenceMediaIds: a.referenceMediaIds,
           imageReferenceMediaIds: a.imageReferenceMediaIds || [],
-          autoDownloadImages: r("#setting-autodownload-images").checked,
-          autoDownloadVideos: r("#setting-autodownload-videos").checked,
+          autoDownloadImages: !1,
+          autoDownloadVideos: !1,
           imageDownloadQuality: l.settings.imageDownloadQuality || "2k",
           videoDownloadQuality: l.settings.videoDownloadQuality || "standard",
           naming: a.naming || l.settings.naming || "numbered",

@@ -1,9 +1,7 @@
 ﻿// TurboFlow background runtime shard: Shared background state, speed controls, tab/connection/auth shell
 // Loaded by src/background/runtime.js in numeric order.
 
-const OAUTH_CLIENT_ID =
-    "790272344428-5pjrnt9d8oi40363iflam6mjkcmopgod.apps.googleusercontent.com",
-  r = "6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV",
+const r = "6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV",
   n = 3e5,
   LOCAL_USER = {
     email: "local@extension.invalid",
@@ -313,81 +311,31 @@ function setFlowConnectionFromTab(e, t = {}) {
 }
 let Ae = null;
 async function Ee() {
-  return new Promise((e, t) => {
-    const a = chrome.identity.getRedirectURL(),
-      o =
-        "https://accounts.google.com/o/oauth2/v2/auth?client_id=" +
-        OAUTH_CLIENT_ID +
-        "&response_type=token&redirect_uri=" +
-        encodeURIComponent(a) +
-        "&scope=" +
-        encodeURIComponent(
-          "https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
-        ) +
-        "&prompt=select_account";
-    chrome.identity.launchWebAuthFlow(
-      { url: o, interactive: !0 },
-      async (a) => {
-        if (chrome.runtime.lastError)
-          return void t(new Error(chrome.runtime.lastError.message));
-        if (!a) return void t(new Error("No response from Google"));
-        const r = new URL(a.replace("#", "?")).searchParams.get("access_token");
-        if (!r) return void t(new Error("No access token received"));
-        try {
-          const t = await fetch(
-            "https://www.googleapis.com/oauth2/v2/userinfo",
-            {
-              headers: { Authorization: "Bearer " + r },
-              signal: AbortSignal.timeout(1e4),
-            },
-          );
-          if (!t.ok) throw new Error("Failed to get Google user info");
-          const a = await t.json();
-          return (
-            (i = {
-              email: (a.email || "").toLowerCase().trim(),
-              name: a.name || "",
-              picture: a.picture || "",
-              token: r,
-            }),
-            await chrome.storage.local.set({ turboflowUser: i }),
-            await Se(),
-            chrome.runtime
-              .sendMessage({ type: "AUTH_STATE_CHANGED", user: i, plan: s })
-              .catch(() => {}),
-            void e(i)
-          );
-        } catch (e) {
-          t(e);
-        }
-      },
-    );
-  });
-}
-async function Te() {
-  if (i?.token)
-    try {
-      await fetch(
-        `https://accounts.google.com/o/oauth2/revoke?token=${i.token}`,
-        { signal: AbortSignal.timeout(5e3) },
-      );
-    } catch (e) {}
-  (chrome.identity.clearAllCachedAuthTokens(() => {}),
-    (i = null),
-    (s = null),
-    await chrome.storage.local.remove(["turboflowUser", "turboflowPlan"]),
-    chrome.runtime
-      .sendMessage({ type: "AUTH_STATE_CHANGED", user: null, plan: null })
-      .catch(() => {}));
-}
-async function ve() {
-  const e = await chrome.storage.local.get(["turboflowUser"]);
-  e.turboflowUser &&
-    ((i = e.turboflowUser),
+  return (
+    (i = LOCAL_USER),
+    await chrome.storage.local.remove(["turboflowUser"]),
     await Se(),
     chrome.runtime
       .sendMessage({ type: "AUTH_STATE_CHANGED", user: i, plan: s })
-      .catch(() => {}));
+      .catch(() => {}),
+    i
+  );
+}
+async function Te() {
+  (i = LOCAL_USER),
+    await chrome.storage.local.remove(["turboflowUser"]),
+    await Se(),
+    chrome.runtime
+      .sendMessage({ type: "AUTH_STATE_CHANGED", user: i, plan: s })
+      .catch(() => {});
+}
+async function ve() {
+  (i = LOCAL_USER),
+    await chrome.storage.local.remove(["turboflowUser"]),
+    await Se(),
+    chrome.runtime
+      .sendMessage({ type: "AUTH_STATE_CHANGED", user: i, plan: s })
+      .catch(() => {});
 }
 async function be() {
   return !0;

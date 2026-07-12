@@ -1,8 +1,9 @@
 @import url("https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200");
-@import url("https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap");
 @import url("./styles/00-foundation-layout.css");
 @import url("./styles/01-controls-prompts-settings.css");
 @import url("./styles/02-modals-library-picker.css");
 @import url("./styles/03-queue-gallery.css");
 @import url("./styles/04-mapper-project-sync.css");
 @import url("./styles/05-badges-fixes-animation.css");
+@import url("./styles/06-generate-surface.css");

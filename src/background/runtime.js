@@ -1,6 +1,7 @@
 ﻿importScripts(
   "../shared/project-domain/00-project-domain.js",
   "../shared/project-domain/01-project-json-contract.js",
+  "../shared/project-domain/02-project-prompt-import.js",
   "runtime/00-state-connection.js",
   "runtime/01-flow-api.js",
   "runtime/02a-generation-common.js",

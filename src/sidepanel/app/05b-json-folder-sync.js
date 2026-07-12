@@ -92,14 +92,34 @@ function tfCreatePromptIndexBatch({
   };
   return (l.batches.push(r), r);
 }
-function tfImportPromptIndexJson(e, t) {
-  const a = tfReadPromptIndexJson(e),
+async function tfImportPromptIndexJson(e, t, options = {}) {
+  const promptImport = globalThis.TFProjectPromptImport;
+  if (!promptImport || "function" != typeof promptImport.importPromptJson)
+    throw new Error("Project prompt import API unavailable.");
+  const importResult = await promptImport.importPromptJson(e, { sourceName: t }),
+    importedCount = importResult.records.length,
+    blockedCount = importResult.summary.blocked_count,
+    a = importResult.records
+      .filter((record) => record.status === "ready")
+      .map((record) => ({
+        fileName: tfCleanDownloadPath(record.file_name, "png"),
+        imagePrompt: record.image_prompt,
+        animationPrompt: record.animation_prompt || "",
+      })),
     n = tfBatchNameFromFile(t),
     s = tfFolderFromPath(a[0]?.fileName),
     projectName = tfCurrentProjectName(n),
     projectFolder = tfCurrentProjectFolder(n),
     folder = `${projectFolder}/${s}`,
     i = {};
+  if (!1 === options.createLegacyBatches) return importResult;
+  if (!a.length) {
+    Te(
+      `Imported ${importedCount} prompt${1 === importedCount ? "" : "s"}; ${blockedCount} blocked in Studio`,
+      "warning",
+    );
+    return importResult;
+  }
   tfResetPromptComposerMapping();
   a.forEach((e, t) => {
     i[t] = tfPrefixDownloadPath(e.fileName, projectFolder);
@@ -183,10 +203,11 @@ function tfImportPromptIndexJson(e, t) {
     r('[data-tab="queue"]').classList.add("active"),
     r("#tab-queue").classList.add("active"),
     Te(
-      `Imported ${a.length} image prompt${1 === a.length ? "" : "s"}${c ? ` and ${c} animation prompt${1 === c ? "" : "s"}` : ""} from ${t}`,
+      `Imported ${a.length} image prompt${1 === a.length ? "" : "s"}${c ? ` and ${c} animation prompt${1 === c ? "" : "s"}` : ""}${blockedCount ? `; ${blockedCount} blocked in Studio` : ""} from ${t}`,
       "success",
     ),
     tfScheduleDownloadHistorySync(500));
+  return importResult;
 }
 function tfFileBaseName(e) {
   return String(e || "")

@@ -114,7 +114,8 @@ function tr() {
       .trim();
     document.execCommand("insertText", !1, t);
   }));
-const ar = r("#speed-pill-group");
+const ar = r("#speed-pill-group"),
+  hr = r("#speed-select");
 function nr() {
   if (l.activeBatchId) return !0;
   if (l.batches.some((e) => "running" === e.status)) return !0;
@@ -125,8 +126,9 @@ function nr() {
   return !1;
 }
 function rr() {
-  if (!ar) return;
   const e = nr();
+  hr && (hr.disabled = e);
+  if (!ar) return;
   ar.querySelectorAll("[data-speed]").forEach((t) => {
     e
       ? (t.classList.add("locked"), (t.disabled = !0))
@@ -134,6 +136,7 @@ function rr() {
   });
 }
 function or() {
+  hr && hr.value !== l.speedMode && (hr.value = l.speedMode);
   const e = r("#speed-mode-badge"),
     t = r("#speed-mode-badge-icon"),
     a = r("#speed-mode-badge-text");
@@ -160,6 +163,7 @@ function or() {
           (a.textContent = "Slow")));
 }
 function sr() {
+  hr && (hr.value = l.speedMode);
   ar &&
     ar.querySelectorAll("[data-speed]").forEach((e) => {
       e.classList.toggle("active", e.dataset.speed === l.speedMode);
@@ -217,7 +221,28 @@ async function cr() {
     (e && (e.style.display = "none"), t && t.classList.remove("has-new-badge"));
   } catch (e) {}
 }
-(ar?.querySelectorAll("[data-speed]").forEach((e) => {
+(hr?.addEventListener("change", () => {
+  if (nr()) {
+    hr.value = l.speedMode;
+    return void Te("Cannot change speed while generating", "warn");
+  }
+  const e = hr.value;
+  e !== l.speedMode &&
+    ((l.speedMode = e),
+    J(),
+    sr(),
+    or(),
+    lr(),
+    Te(
+      {
+        fast: "Fast mode",
+        balanced: "Balanced mode",
+        slow: "Slow mode",
+      }[e] || e,
+      "info",
+    ));
+}),
+ar?.querySelectorAll("[data-speed]").forEach((e) => {
   e.addEventListener("click", () => {
     if (nr()) return void Te("âš ï¸ Cannot change speed while generating", "warn");
     const t = e.dataset.speed;
@@ -306,6 +331,8 @@ async function cr() {
           totalImages: r,
         } = e;
         if (!l.activeBatchId) return;
+        const studioBatch = e.uiBatchId ? pn(e.uiBatchId) : pn(l.activeBatchId);
+        globalThis.tfHandleStudioGenerationMessage?.(e, studioBatch);
         if (
           (Oa(),
           Te(
@@ -361,6 +388,7 @@ async function cr() {
           batchKind: t?.batchKind || t?.settings?.batchKind || null,
           fileName: e.fileName || null,
         });
+        globalThis.tfHandleStudioGenerationMessage?.(e, t);
       }
       if (
         ("DOWNLOAD_COMPLETE" === e.subType &&

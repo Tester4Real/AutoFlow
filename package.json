@@ -1,0 +1,21 @@
+{
+  "name": "autoflow-extension",
+  "version": "2.2.21",
+  "private": true,
+  "scripts": {
+    "build:studio": "node scripts/build-studio.mjs",
+    "test": "node test/project-prompt-import.smoke.js && node test/generate-surface.smoke.js && node test/studio-workspace.smoke.js"
+  },
+  "dependencies": {
+    "@fontsource/poppins": "5.2.7",
+    "@heroui/react": "3.2.2",
+    "lucide-react": "1.24.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "tailwindcss": "4.3.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.2",
+    "esbuild": "0.28.1"
+  }
+}

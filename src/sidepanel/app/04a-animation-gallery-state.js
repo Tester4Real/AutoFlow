@@ -213,8 +213,8 @@ async function Pa(e) {
     J(),
     o(".tab").forEach((e) => e.classList.remove("active")),
     o(".tab-content").forEach((e) => e.classList.remove("active")),
-    r('[data-tab="control"]').classList.add("active"),
-    r("#tab-control").classList.add("active"),
+      r('[data-tab="generate"]')?.classList.add("active"),
+      r("#tab-generate")?.classList.add("active"),
     setTimeout(() => {
       Wt();
     }, 200),
@@ -487,8 +487,8 @@ function qa(e, t, a, n) {
     ee(),
     o(".tab").forEach((e) => e.classList.remove("active")),
     o(".tab-content").forEach((e) => e.classList.remove("active")),
-    r('[data-tab="gallery"]').classList.add("active"),
-    r("#tab-gallery").classList.add("active"));
+    r('[data-tab="queue"]')?.classList.add("active"),
+    r("#tab-queue")?.classList.add("active"));
 }
 function Oa() {
   let e = 0;

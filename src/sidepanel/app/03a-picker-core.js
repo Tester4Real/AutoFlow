@@ -1,4 +1,4 @@
-﻿// TurboFlow shard: Image picker setup, uploads, reference selectors, mapper modal open/close
+// TurboFlow shard: Image picker setup, uploads, reference selectors, mapper modal open/close
 // Loaded in numeric order; depends on earlier shards sharing globals.
 
 // TurboFlow side panel shard: Image picker and per-prompt mapper
@@ -21,7 +21,7 @@ Mt &&
       (await St("upload images")) &&
       (1 === t.length
         ? await yt(t[0])
-        : (Te(`ðŸ“¤ Uploading ${t.length} images (10x parallel)...`, "info"),
+        : (Te(`📤 Uploading ${t.length} images (10x parallel)...`, "info"),
           await wt(t)));
   }));
 let $t = !1,
@@ -36,22 +36,22 @@ async function St(e) {
     return (
       !(!a || "connected" !== a.status) ||
       (Te(
-        `âŒ Cannot ${e} â€” not connected. ${a?.lastError || "Open Google Flow with a project first"}`,
+        `❌ Cannot ${e} — not connected. ${a?.lastError || "Open Google Flow with a Flow project first"}`,
         "error",
       ),
       Gn({
-        icon: "ðŸ”Œ",
+        icon: "🔌",
         title: "Not Connected to Flow",
-        message: `You need an open Google Flow project to ${e}.`,
-        hint: '<strong>Step 1:</strong> Open <a href="https://labs.google/fx/tools/flow" target="_blank" style="color:#a8c7fa">labs.google/fx</a><br><strong>Step 2:</strong> Sign in with Google if Flow asks<br><strong>Step 3:</strong> Create or open a project<br><strong>Step 4:</strong> Wait for the status badge to show "Connected"',
+        message: `You need an open Google Flow project to to ${e}.`,
+        hint: '<strong>Step 1:</strong> Open <a href="https://labs.google/fx/tools/flow" target="_blank" style="color:#a8c7fa">labs.google/fx</a><br><strong>Step 2:</strong> Sign in with Google if Flow asks<br><strong>Step 3:</strong> Create or open a Flow project<br><strong>Step 4:</strong> Wait for the status badge to show "Connected"',
       }),
       !1)
     );
   } catch (t) {
     return (
-      Te(`âŒ Cannot ${e} â€” connection check failed`, "error"),
+      Te(`❌ Cannot ${e} — connection check failed`, "error"),
       Gn({
-        icon: "ðŸ”Œ",
+        icon: "🔌",
         title: "Connection Check Failed",
         message: "Could not verify connection to Google Flow.",
         hint: "Make sure you have a Flow project open and try again.",
@@ -143,7 +143,7 @@ function Ft() {
         else if (E.includes(a)) E = E.filter((e) => e !== a);
         else {
           if (E.length >= k)
-            return void Te(`âš ï¸ Maximum ${k} images allowed`, "warn");
+            return void Te(`⚠️ Maximum ${k} images allowed`, "warn");
           E.push(a);
         }
         (e.querySelectorAll(".picker-item").forEach((e) => {
@@ -185,7 +185,7 @@ async function Nt(e) {
         });
       (($t = !1), At(), Ft());
     }
-  } else Te("âš ï¸ No image files selected", "warn");
+  } else Te("⚠️ No image files selected", "warn");
 }
 function qt() {
   Ct({
@@ -239,7 +239,7 @@ function jt() {
           .map((e, t) => {
             const a = pt(e),
               n = a?.thumbnail || "";
-            return `\n            <div class="reference-item">\n                ${n ? `<img src="${n}" alt="Reference">` : '<span style="font-size:18px">ðŸ–¼</span>'}\n                <span class="ref-info">${se(a?.fileName || e.substring(0, 12) + "...")}</span>\n                <button class="btn-remove" data-remove-imgref="${t}">âœ•</button>\n            </div>\n        `;
+            return `\n            <div class="reference-item">\n                ${n ? `<img src="${n}" alt="Reference">` : '<span style="font-size:18px">🖼</span>'}\n                <span class="ref-info">${se(a?.fileName || e.substring(0, 12) + "...")}</span>\n                <button class="btn-remove" data-remove-imgref="${t}">✕</button>\n            </div>\n        `;
           })
           .join("")),
         e.querySelectorAll("[data-remove-imgref]").forEach((e) => {
@@ -258,7 +258,7 @@ function Gt() {
           .map((e, t) => {
             const a = pt(e),
               n = a?.thumbnail || "";
-            return `\n            <div class="reference-item">\n                ${n ? `<img src="${n}" alt="Reference">` : '<span style="font-size:18px">ðŸ–¼</span>'}\n                <span class="ref-info">${se(a?.fileName || e.substring(0, 12) + "...")}</span>\n                <button class="btn-remove" data-remove-vidref="${t}">âœ•</button>\n            </div>\n        `;
+            return `\n            <div class="reference-item">\n                ${n ? `<img src="${n}" alt="Reference">` : '<span style="font-size:18px">🖼</span>'}\n                <span class="ref-info">${se(a?.fileName || e.substring(0, 12) + "...")}</span>\n                <button class="btn-remove" data-remove-vidref="${t}">✕</button>\n            </div>\n        `;
           })
           .join("")),
         e.querySelectorAll("[data-remove-vidref]").forEach((e) => {
@@ -283,7 +283,7 @@ function Ht() {
     a = t?.thumbnail || "",
     n = t?.fileName || "Start Frame";
   ((e.className = "upload-preview has-image"),
-    (e.innerHTML = `\n        ${a ? `<img src="${a}" alt="Start frame">` : ""}\n        <div class="upload-info">\n            <div class="filename">${se(n)}</div>\n            <div class="media-id">${l.startFrameMediaId.substring(0, 16)}...</div>\n        </div>\n        <button class="btn-remove" id="btn-change-start">Change</button>\n        <button class="btn-remove" id="btn-remove-start">âœ•</button>\n    `),
+    (e.innerHTML = `\n        ${a ? `<img src="${a}" alt="Start frame">` : ""}\n        <div class="upload-info">\n            <div class="filename">${se(n)}</div>\n            <div class="media-id">${l.startFrameMediaId.substring(0, 16)}...</div>\n        </div>\n        <button class="btn-remove" id="btn-change-start">Change</button>\n        <button class="btn-remove" id="btn-remove-start">✕</button>\n    `),
     e.querySelector("#btn-change-start")?.addEventListener("click", Ut),
     e.querySelector("#btn-remove-start")?.addEventListener("click", () => {
       ((l.startFrameMediaId = null), Ht(), J());
@@ -303,7 +303,7 @@ function Qt() {
     a = t?.thumbnail || "",
     n = t?.fileName || "End Frame";
   ((e.className = "upload-preview has-image"),
-    (e.innerHTML = `\n        ${a ? `<img src="${a}" alt="End frame">` : ""}\n        <div class="upload-info">\n            <div class="filename">${se(n)}</div>\n            <div class="media-id">${l.endFrameMediaId.substring(0, 16)}...</div>\n        </div>\n        <button class="btn-remove" id="btn-change-end">Change</button>\n        <button class="btn-remove" id="btn-remove-end">âœ•</button>\n    `),
+    (e.innerHTML = `\n        ${a ? `<img src="${a}" alt="End frame">` : ""}\n        <div class="upload-info">\n            <div class="filename">${se(n)}</div>\n            <div class="media-id">${l.endFrameMediaId.substring(0, 16)}...</div>\n        </div>\n        <button class="btn-remove" id="btn-change-end">Change</button>\n        <button class="btn-remove" id="btn-remove-end">✕</button>\n    `),
     e.querySelector("#btn-change-end")?.addEventListener("click", Bt),
     e.querySelector("#btn-remove-end")?.addEventListener("click", () => {
       ((l.endFrameMediaId = null), Qt(), J());
@@ -313,7 +313,7 @@ function Wt() {
   const e = ue();
   if ("disabled" === e)
     return void Te(
-      "âš ï¸ Video text mode doesn't support per-prompt mapping",
+      "⚠️ Video text mode doesn't support per-prompt mapping",
       "warn",
     );
   let t = r("#prompt-input")
@@ -328,7 +328,7 @@ function Wt() {
       )
     )
       return void Gn({
-        icon: "âœï¸",
+        icon: "✍️",
         title: "Prompts Required",
         message:
           'Write your prompts first <strong>(one per line)</strong>, then click "Different for Each" to assign images to each one.',
@@ -363,10 +363,10 @@ function Wt() {
         (V = [])),
     (r("#mapper-modal-title").textContent =
       "start_frame" === e
-        ? "ðŸ“Ž Start Frame Assignments"
+        ? "📎 Start Frame Assignments"
         : "start_end_frame" === e
-          ? "ðŸ“Ž Start + End Frame Assignments"
-          : "ðŸ“Ž Reference Assignments"),
+          ? "📎 Start + End Frame Assignments"
+          : "📎 Reference Assignments"),
     (r("#reference-mapper-modal").style.display = "flex"));
   const a = /@[a-z0-9_-]+/i,
     n = z.some((e) => a.test(e)),

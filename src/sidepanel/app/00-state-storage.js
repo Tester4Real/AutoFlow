@@ -40,8 +40,8 @@ const l = {
     videoMode: "text",
     videoCount: 1,
     videoDuration: 8,
-    autoDownloadImages: !0,
-    autoDownloadVideos: !0,
+    autoDownloadImages: !1,
+    autoDownloadVideos: !1,
     imageDownloadQuality: "standard",
     videoDownloadQuality: "standard",
     folder: "turboflow",
@@ -262,6 +262,7 @@ async function Z() {
     "function" == typeof tr && tr(),
     "function" == typeof er && er(),
     "function" == typeof Qn && Qn());
+  "function" == typeof tfRefreshGenerateSurface && tfRefreshGenerateSurface();
   const a = document.querySelector("#single-prompt-toggle");
   a && (a.checked = l.singlePromptMode);
 }
