@@ -7,5 +7,6 @@ dist/
 .agents/
 .serena/
 .tokensave/
+opencode.json
 node_modules/
 src/project-studio/generated/

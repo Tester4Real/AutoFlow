@@ -755,6 +755,10 @@
     return Array.isArray(project?.video_jobs) ? project.video_jobs.filter(isObject) : [];
   }
 
+  function getProjectMediaLinks(project) {
+    return Array.isArray(project?.media_links) ? project.media_links.filter(isObject) : [];
+  }
+
   function getPromptAnimationPrompt(record) {
     return String(record?.animation_prompt || record?.animationPrompt || "").trim();
   }
@@ -845,6 +849,103 @@
       };
     }
     return { flow_context_id: "", status: "disconnected" };
+  }
+
+  function getMediaLinkContracts() {
+    return root.TFMediaLinkContracts || null;
+  }
+
+  function createMediaLinkId() {
+    const domain = getDomain();
+    if (domain && typeof domain.createId === "function") {
+      return domain.createId("media_link");
+    }
+    return `media_link_${Date.now().toString(36)}_${Math.random()
+      .toString(36)
+      .slice(2, 10)}`;
+  }
+
+  function normalizeMediaCacheKey(value) {
+    const api = getMediaLinkContracts();
+    if (api && typeof api.normalizeCacheKey === "function") {
+      return api.normalizeCacheKey(value);
+    }
+    return String(value || "").trim().toLowerCase();
+  }
+
+  function buildMediaLinkFromVariant(project, variant, timestamp, existingLink) {
+    if (!project || !variant?.variant_id) return null;
+    const mediaId = getVariantMediaId(variant);
+    const cacheKey = normalizeMediaCacheKey(variant.cache_key || variant.cacheKey || "");
+    const fileName = String(
+      variant.cached_file_name ||
+        variant.cachedFileName ||
+        variant.local_file_name ||
+        variant.localFileName ||
+        variant.generated_file_name ||
+        variant.generatedFileName ||
+        variant.expected_file_name ||
+        variant.expectedFileName ||
+        "",
+    ).trim();
+    const downloadId = String(variant.download_id || variant.downloadId || "").trim();
+    if (!mediaId && !cacheKey && !fileName && !downloadId) return null;
+
+    const rawLink = Object.assign({}, existingLink || {}, {
+      media_link_id: existingLink?.media_link_id || createMediaLinkId(),
+      project_id: project.project_id,
+      owner_type: "image_variant",
+      owner_id: variant.variant_id,
+      local_media_id:
+        existingLink?.local_media_id ||
+        variant.local_media_id ||
+        variant.localMediaId ||
+        variant.variant_id,
+      cache_key: cacheKey || existingLink?.cache_key || "",
+      flow_media_id: mediaId || existingLink?.flow_media_id || "",
+      flow_context_id: getVariantFlowContextId(variant) || existingLink?.flow_context_id || "",
+      download_id: downloadId || existingLink?.download_id || "",
+      local_path: variant.local_path || variant.localPath || existingLink?.local_path || "",
+      file_name: fileName || existingLink?.file_name || "",
+      mime_type: variant.mime_type || variant.mimeType || existingLink?.mime_type || "image/png",
+      size_bytes: Number(variant.byte_length || variant.byteLength || existingLink?.size_bytes || 0) || 0,
+      created_at: existingLink?.created_at || timestamp,
+      updated_at: timestamp,
+    });
+
+    const api = getMediaLinkContracts();
+    return api && typeof api.normalizeMediaLink === "function"
+      ? api.normalizeMediaLink(rawLink)
+      : rawLink;
+  }
+
+  function findMediaLinkIndex(links, link) {
+    if (!link) return -1;
+    return links.findIndex((item) => {
+      if (link.media_link_id && item.media_link_id === link.media_link_id) return true;
+      if (item.owner_type === link.owner_type && item.owner_id === link.owner_id) return true;
+      if (link.cache_key && item.cache_key === link.cache_key) return true;
+      if (link.flow_media_id && item.flow_media_id === link.flow_media_id) return true;
+      return false;
+    });
+  }
+
+  function upsertMediaLink(links, link) {
+    if (!link) return;
+    const index = findMediaLinkIndex(links, link);
+    if (index >= 0) {
+      links[index] = Object.assign({}, links[index], link);
+      return;
+    }
+    links.push(link);
+  }
+
+  function syncVariantMediaLink(links, project, variant, timestamp) {
+    const existingIndex = links.findIndex((item) => {
+      return item.owner_type === "image_variant" && item.owner_id === variant?.variant_id;
+    });
+    const existing = existingIndex >= 0 ? links[existingIndex] : null;
+    upsertMediaLink(links, buildMediaLinkFromVariant(project, variant, timestamp, existing));
   }
 
   function buildFlowContextId(connectionState) {
@@ -1054,7 +1155,6 @@
       let reason = "";
       let canCreateDraft = false;
       let canQueue = false;
-      let actionLabel = "Create Draft";
 
       if (!animationPrompt && !selectedVariant) {
         itemStatus = "not_ready";
@@ -1070,25 +1170,22 @@
         reason = "Selected image needs local file repair.";
       } else if (!job) {
         itemStatus = "draft";
-        reason = "Ready to create a Video Draft.";
+        reason = "Ready to add to the video queue.";
         canCreateDraft = true;
       } else if (terminalJob) {
         reason =
           job.selected_variant_id === selectedVariant.variant_id
             ? "Existing job is protected after run starts."
-            : "Existing job is protected; create a new draft from the new selection.";
+            : "Existing job is protected; add the new selection to the queue.";
         canCreateDraft = true;
-        actionLabel = "Create New Draft";
       } else if (status === "needs_review" || reviewReason) {
         itemStatus = "needs_review";
         reason = job.needs_review_reason || reviewReason;
         canCreateDraft = true;
-        actionLabel = "Update Draft";
       } else if (status === "draft") {
-        reason = "Draft is ready for queue review.";
+        reason = "Ready to add to queue.";
         canCreateDraft = true;
         canQueue = true;
-        actionLabel = "Update Draft";
       } else if (status === "ready") {
         reason = "Queued and ready to run.";
       } else if (status === "running") {
@@ -1098,7 +1195,6 @@
       } else if (status === "failed") {
         reason = job.error_message || "Video job failed.";
         canCreateDraft = true;
-        actionLabel = "Update Draft";
       }
 
       const statusView = getVideoStatusView(itemStatus);
@@ -1111,11 +1207,15 @@
         selected_variant_id: selectedVariant?.variant_id || "",
         selected_file_name: selectedFileName,
         selected_preview_url:
-          selectedVariant?.thumbnail_url ||
           selectedVariant?.data_url ||
           selectedVariant?.preview_url ||
+          selectedVariant?.thumbnail_url ||
           selectedVariant?.fife_url ||
           "",
+        selected_cache_key: selectedVariant?.cache_key || "",
+        selected_cached_file_name: selectedVariant?.cached_file_name || "",
+        selected_media_id: selectedVariant?.media_id || selectedVariant?.mediaId || "",
+        selected_fife_url: selectedVariant?.fife_url || selectedVariant?.thumbnail_url || "",
         job,
         job_id: job?.job_id || "",
         status: itemStatus,
@@ -1125,7 +1225,6 @@
         source_index: Number(record.source_index || sourceIndex || 0),
         queue_order: Number(job?.queue_order || job?.queueOrder || 0),
         can_create_draft: canCreateDraft,
-        create_label: actionLabel,
         can_queue: canQueue,
         can_hold: !!job && status === "ready",
         can_remove: !!job && !terminalJob,
@@ -1199,7 +1298,11 @@
           local_file_name: variant.local_file_name || "",
           local_path: variant.local_path || "",
           download_id: variant.download_id || "",
-          preview_url: variant.thumbnail_url || variant.data_url || variant.preview_url || variant.fife_url || "",
+          preview_url: variant.data_url || variant.preview_url || variant.thumbnail_url || variant.fife_url || "",
+          media_id: variant.media_id || variant.mediaId || "",
+          cache_key: variant.cache_key || "",
+          cached_file_name: variant.cached_file_name || "",
+          fife_url: variant.fife_url || variant.thumbnail_url || "",
           status_label: statusView.label,
           tone: statusView.tone,
           is_selected: isSelected,
@@ -1647,9 +1750,21 @@
       generated_file_name: generatedFileName,
       local_file_name: localFileName,
       local_path: getVariantInputValue(variantInput, "local_path", "localPath"),
-      media_id: getVariantInputValue(variantInput, "media_id", "mediaId"),
+      media_id:
+        getVariantInputValue(variantInput, "media_id", "mediaId") ||
+        existingVariant?.media_id ||
+        existingVariant?.mediaId ||
+        "",
       flow_context_id: getActiveFlowContextId(project),
       download_id: getVariantInputValue(variantInput, "download_id", "downloadId"),
+      cache_key:
+        normalizeMediaCacheKey(getVariantInputValue(variantInput, "cache_key", "cacheKey")) ||
+        existingVariant?.cache_key ||
+        "",
+      cached_file_name:
+        getVariantInputValue(variantInput, "cached_file_name", "cachedFileName") ||
+        existingVariant?.cached_file_name ||
+        "",
       thumbnail_url: getVariantInputValue(variantInput, "thumbnail_url", "thumbnailUrl"),
       fife_url: getVariantInputValue(variantInput, "fife_url", "fifeUrl"),
       file_state: fileState,
@@ -1801,6 +1916,143 @@
     return studioState;
   }
 
+  async function updateProjectById(projectId, updates) {
+    const domain = getDomain();
+    const key = String(projectId || "").trim();
+    if (!key) {
+      throw new Error("No YouTube Channel selected.");
+    }
+    if (!domain || typeof domain.updateProject !== "function") {
+      throw new Error("Channel storage API unavailable.");
+    }
+
+    const result = await domain.updateProject(key, updates);
+    if (!result || !result.ok) {
+      const message = result?.error?.message || "Channel update failed.";
+      throw new Error(message);
+    }
+
+    studioState.domainState = result.state;
+    studioState.activeProject = resolveActiveProject(result.state);
+    studioState.flowContext = getStoredFlowContext(studioState.activeProject);
+    studioState.lastError = null;
+    return result;
+  }
+
+  function findVideoJobByBatchId(domainState, batchId) {
+    const key = String(batchId || "").trim();
+    if (!key) return null;
+    const projects = Array.isArray(domainState?.projects) ? domainState.projects : [];
+    for (const project of projects) {
+      const job = getProjectVideoJobs(project).find((item) => {
+        return item.job_id === key || item.run_batch_id === key;
+      });
+      if (job) return { project, job };
+    }
+    return null;
+  }
+
+  function findProjectByImageRunId(domainState, imageRunId) {
+    const key = String(imageRunId || "").trim();
+    if (!key) return null;
+    const projects = Array.isArray(domainState?.projects) ? domainState.projects : [];
+    for (const project of projects) {
+      const run = getProjectImageGenerationRuns(project).find((item) => item.image_run_id === key);
+      if (run) return { project, run };
+    }
+    return null;
+  }
+
+  function variantMatchesCachedPreview(variant, message) {
+    const mediaId = String(message.mediaId || message.media_id || "").trim();
+    const cacheKey = normalizeMediaCacheKey(message.cacheKey || message.cache_key || "");
+    const fileName = String(
+      message.cachedFileName ||
+        message.cached_file_name ||
+        message.fileName ||
+        message.file_name ||
+        "",
+    ).trim();
+    const names = [
+      variant.cached_file_name,
+      variant.cachedFileName,
+      variant.generated_file_name,
+      variant.generatedFileName,
+      variant.local_file_name,
+      variant.localFileName,
+      variant.expected_file_name,
+      variant.expectedFileName,
+    ].map((value) => String(value || "").trim()).filter(Boolean);
+
+    return (
+      (!!mediaId && getVariantMediaId(variant) === mediaId) ||
+      (!!cacheKey && normalizeMediaCacheKey(variant.cache_key || variant.cacheKey || "") === cacheKey) ||
+      (!!fileName && names.includes(fileName))
+    );
+  }
+
+  async function recordCachedPreviewFromRuntimeMessage(message) {
+    if (!message || message.type !== "FROM_BACKGROUND" || message.subType !== "PREVIEW_CACHED") {
+      return false;
+    }
+
+    const domain = getDomain();
+    let domainState = studioState.domainState;
+    if (domain && typeof domain.load === "function") {
+      domainState = await domain.load();
+      studioState.domainState = domainState;
+      studioState.activeProject = resolveActiveProject(domainState);
+      studioState.flowContext = getStoredFlowContext(studioState.activeProject);
+    }
+
+    const runMatch = findProjectByImageRunId(domainState, message.uiBatchId);
+    const project = runMatch?.project || studioState.activeProject;
+    if (!project) return false;
+
+    const cacheKey = normalizeMediaCacheKey(message.cacheKey || message.cache_key || "");
+    const cachedFileName = String(
+      message.cachedFileName ||
+        message.cached_file_name ||
+        message.fileName ||
+        message.file_name ||
+        "",
+    ).trim();
+    const mediaId = String(message.mediaId || message.media_id || "").trim();
+    if (!cacheKey && !cachedFileName && !mediaId) return false;
+
+    const timestamp = new Date().toISOString();
+    let changed = false;
+    const nextVariants = getProjectImageVariants(project).map((variant) => {
+      if (!variantMatchesCachedPreview(variant, message)) return variant;
+      changed = true;
+      return Object.assign({}, variant, {
+        cache_key: cacheKey || variant.cache_key || "",
+        cached_file_name: cachedFileName || variant.cached_file_name || "",
+        media_id: mediaId || getVariantMediaId(variant),
+        local_file_name: variant.local_file_name || cachedFileName || variant.generated_file_name || "",
+        file_state: "available",
+        repair_state: "",
+        status: variant.status === "failed" ? variant.status : "available",
+        cached_at: message.cachedAt || message.cached_at || timestamp,
+        updated_at: timestamp,
+      });
+    });
+    if (!changed) return false;
+
+    const nextMediaLinks = getProjectMediaLinks(project).slice();
+    nextVariants.forEach((variant) => {
+      if (variantMatchesCachedPreview(variant, message)) {
+        syncVariantMediaLink(nextMediaLinks, project, variant, timestamp);
+      }
+    });
+
+    await updateProjectById(project.project_id, {
+      image_variants: nextVariants,
+      media_links: nextMediaLinks,
+    });
+    return true;
+  }
+
   function hasFlowContextChanged(project, context) {
     const previous = project?.flow_context || {};
     return (
@@ -1834,7 +2086,15 @@
       };
     }
 
-    const context = Object.assign(buildFlowContextFromConnection(response?.state || response), {
+    const connectionState = response?.state || response;
+    const hasExplicitConnectionState =
+      Object.prototype.hasOwnProperty.call(Object(connectionState), "status") ||
+      Object.prototype.hasOwnProperty.call(Object(connectionState), "projectId") ||
+      Object.prototype.hasOwnProperty.call(Object(connectionState), "project_id");
+    const contextBase = hasExplicitConnectionState
+      ? buildFlowContextFromConnection(connectionState)
+      : getStoredFlowContext(project);
+    const context = Object.assign(contextBase, {
       updated_at: new Date().toISOString(),
     });
     if (String(studioState.activeProject?.project_id || "") !== projectId) {
@@ -2382,6 +2642,7 @@
     const completions = Array.isArray(completionItems) ? completionItems.filter(isObject) : [];
     const existingVariants = getProjectImageVariants(project);
     const nextVariants = existingVariants.slice();
+    const nextMediaLinks = getProjectMediaLinks(project).slice();
     const recordedVariants = new Array();
     const completedPromptIds = new Set();
     const defaultImageCount = Number(runRecord.image_count || 2);
@@ -2419,6 +2680,7 @@
           timestamp,
         );
         upsertImageVariant(nextVariants, variant);
+        syncVariantMediaLink(nextMediaLinks, project, variant, timestamp);
         recordedVariants.push(variant);
       }
     });
@@ -2444,6 +2706,7 @@
     await updateActiveProject({
       image_generation_runs: nextRuns,
       image_variants: nextVariants,
+      media_links: nextMediaLinks,
       prompt_records: promptRecords,
     });
 
@@ -2508,8 +2771,10 @@
       throw new Error("No active YouTube Channel selected.");
     }
 
+    await refreshFlowContext();
+    const currentProject = studioState.activeProject || project;
     const jobKey = String(jobId || "").trim();
-    const videoJobs = getProjectVideoJobs(project);
+    const videoJobs = getProjectVideoJobs(currentProject);
     const targetJob = videoJobs.find((job) => job.job_id === jobKey);
     if (!targetJob) {
       throw new Error(`Video Draft not found: ${jobKey}.`);
@@ -2520,11 +2785,11 @@
       throw new Error("Running or complete video jobs are protected.");
     }
 
-    const promptRecord = getProjectPromptRecords(project).find(
+    const promptRecord = getProjectPromptRecords(currentProject).find(
       (record) => record.prompt_id === targetJob.prompt_id,
     );
-    const selectedVariant = getSelectedVariantForPrompt(project, promptRecord);
-      const reviewReason = getVideoJobReviewReason(project, targetJob, promptRecord, selectedVariant);
+    const selectedVariant = getSelectedVariantForPrompt(currentProject, promptRecord);
+      const reviewReason = getVideoJobReviewReason(currentProject, targetJob, promptRecord, selectedVariant);
     const timestamp = new Date().toISOString();
 
     if (reviewReason) {
@@ -2563,8 +2828,11 @@
     const key = String(promptId || "").trim();
     const currentItem = getVideoQueueItems(project).find((item) => item.prompt_id === key);
     if (!currentItem) throw new Error("Scene not found.");
-    if (currentItem.status === "ready") return currentItem.job;
-    if (currentItem.status === "running" || currentItem.status === "complete") {
+    if (currentItem.status === "ready" && !currentItem.can_create_draft) return currentItem.job;
+    if (
+      (currentItem.status === "running" || currentItem.status === "complete") &&
+      !currentItem.can_create_draft
+    ) {
       return currentItem.job;
     }
     const draft = await createOrUpdateVideoDraft(key);
@@ -2638,10 +2906,43 @@
     const jobKey = String(jobId || "").trim();
     const step = direction === "down" ? 1 : -1;
     const videoJobs = getProjectVideoJobs(project);
+    const promptRecords = getProjectPromptRecords(project);
+    const targetJob = videoJobs.find((job) => job.job_id === jobKey);
+    const targetRecord = promptRecords.find((record) => record.prompt_id === targetJob?.prompt_id);
+    if (!targetRecord) {
+      throw new Error(`Ready video job not found: ${jobKey}.`);
+    }
+    const knownImportIds = new Set(
+      getProjectPromptImports(project).map((item) => String(item.import_id || "")),
+    );
+    const importId = String(targetRecord?.source?.import_id || "");
+    const targetVideoId = importId && knownImportIds.has(importId) ? importId : "legacy";
+    const promptIdsInVideo = new Set(
+      getVideoPromptRecords(project, targetVideoId).map((record) => record.prompt_id),
+    );
+    const sourceIndexByPromptId = new Map(
+      promptRecords.map((record, index) => [
+        record.prompt_id,
+        Number(record.source_index || index || 0),
+      ]),
+    );
     const readyJobs = videoJobs
-      .filter((job) => normalizeVideoJobStatus(job) === "ready")
+      .filter((job) => {
+        return (
+          normalizeVideoJobStatus(job) === "ready" &&
+          promptIdsInVideo.has(String(job.prompt_id || "").trim())
+        );
+      })
       .slice()
-      .sort((left, right) => Number(left.queue_order || 0) - Number(right.queue_order || 0));
+      .sort((left, right) => {
+        const leftOrder = Number(left.queue_order || left.queueOrder || 0);
+        const rightOrder = Number(right.queue_order || right.queueOrder || 0);
+        if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+        return (
+          Number(sourceIndexByPromptId.get(left.prompt_id) || 0) -
+          Number(sourceIndexByPromptId.get(right.prompt_id) || 0)
+        );
+      });
     const index = readyJobs.findIndex((job) => job.job_id === jobKey);
     if (index < 0) {
       throw new Error(`Ready video job not found: ${jobKey}.`);
@@ -2679,8 +2980,10 @@
       throw new Error("No active YouTube Channel selected.");
     }
 
+    await refreshFlowContext();
+    const currentProject = studioState.activeProject || project;
     const jobKey = String(jobId || "").trim();
-    const videoJobs = getProjectVideoJobs(project);
+    const videoJobs = getProjectVideoJobs(currentProject);
     const targetJob = videoJobs.find((job) => job.job_id === jobKey);
     if (!targetJob) {
       throw new Error(`Video job not found: ${jobKey}.`);
@@ -2691,11 +2994,11 @@
       throw new Error("Only Ready or Failed video jobs can run.");
     }
 
-    const promptRecord = getProjectPromptRecords(project).find(
+    const promptRecord = getProjectPromptRecords(currentProject).find(
       (record) => record.prompt_id === targetJob.prompt_id,
     );
-    const selectedVariant = getSelectedVariantForPrompt(project, promptRecord);
-    const reviewReason = getVideoJobReviewReason(project, targetJob, promptRecord, selectedVariant);
+    const selectedVariant = getSelectedVariantForPrompt(currentProject, promptRecord);
+    const reviewReason = getVideoJobReviewReason(currentProject, targetJob, promptRecord, selectedVariant);
     if (reviewReason) {
       await updateActiveProject({
         video_jobs: videoJobs.map((job) =>
@@ -2735,31 +3038,31 @@
 
     const timestamp = new Date().toISOString();
     const videoId = String(promptRecord?.source?.import_id || "legacy");
-    const video = getProjectVideos(project).find((item) => item.video_id === videoId);
+    const video = getProjectVideos(currentProject).find((item) => item.video_id === videoId);
     const channelFolder = safeFolderName(
-      project.display_name || project.name || "autoflow-channel",
+      currentProject.display_name || currentProject.name || "autoflow-channel",
     );
     const videoFolder = safeFolderName(video?.display_name || "imported-video");
     const folder = `${channelFolder}/${videoFolder}`;
-    const settings = Object.assign({}, project.settings || {}, {
+    const settings = Object.assign({}, currentProject.settings || {}, {
       mode: "video",
       folder,
       videoMode: "start_frame",
       referenceMode: "mapped",
       perPromptStartFrames: { 0: mediaId },
       videoCount: 1,
-      videoQuality: project.settings?.videoQuality || "lite",
-      videoRatio: project.settings?.videoRatio || "landscape",
-      videoDuration: project.settings?.videoDuration || 8,
+      videoQuality: currentProject.settings?.videoQuality || "lite",
+      videoRatio: currentProject.settings?.videoRatio || "landscape",
+      videoDuration: currentProject.settings?.videoDuration || 8,
       autoDownloadImages: false,
       autoDownloadVideos: false,
-      videoDownloadQuality: project.settings?.videoDownloadQuality || "standard",
-      projectName: project.display_name || project.name || "AutoFlow Channel",
+      videoDownloadQuality: currentProject.settings?.videoDownloadQuality || "standard",
+      projectName: currentProject.display_name || currentProject.name || "AutoFlow Channel",
       projectFolder: channelFolder,
       videoId,
       videoName: video?.display_name || "Imported video",
       batchKind: "project_video_job",
-      speedMode: project.settings?.speedMode || "fast",
+      speedMode: currentProject.settings?.speedMode || "fast",
     });
 
     const response = await runtime.sendMessage({
@@ -2783,7 +3086,7 @@
         run_batch_id: targetJob.job_id,
         run_prompt_index: 0,
         run_started_at: timestamp,
-        flow_context_id: getActiveFlowContextId(project),
+        flow_context_id: getActiveFlowContextId(currentProject),
         start_frame_flow_context_id: getVariantFlowContextId(selectedVariant),
         error_message: "",
         updated_at: timestamp,
@@ -2929,19 +3232,41 @@
   }
 
   async function handleVideoRuntimeMessage(message) {
+    const cachedPreviewRecorded = await recordCachedPreviewFromRuntimeMessage(message);
+    if (cachedPreviewRecorded) {
+      return true;
+    }
+
     if (!message || message.type !== "FROM_BACKGROUND" || !message.uiBatchId) {
       return false;
     }
 
-    const project = studioState.activeProject;
-    if (!project) return false;
-
     const batchId = String(message.uiBatchId || "").trim();
+    const domain = getDomain();
+    let domainState = studioState.domainState;
+    if (domain && typeof domain.load === "function") {
+      domainState = await domain.load();
+      studioState.domainState = domainState;
+      studioState.activeProject = resolveActiveProject(domainState);
+      studioState.flowContext = getStoredFlowContext(studioState.activeProject);
+    }
+    const match = findVideoJobByBatchId(domainState, batchId);
+    if (!match) return false;
+
+    const project = match.project;
     const videoJobs = getProjectVideoJobs(project);
-    const targetJob = videoJobs.find(
-      (job) => job.job_id === batchId || job.run_batch_id === batchId,
-    );
+    const targetJob = match.job;
     if (!targetJob) return false;
+
+    const targetStatus = normalizeVideoJobStatus(targetJob);
+    const stoppedJob = targetStatus === "failed" && !!targetJob.stopped_at;
+    if (
+      stoppedJob &&
+      (message.subType === "PREVIEW_READY" ||
+        (message.subType === "PROMPT_STATUS" && message.status !== "failed"))
+    ) {
+      return false;
+    }
 
     const timestamp = new Date().toISOString();
     let nextJob = null;
@@ -2979,7 +3304,7 @@
     }
 
     if (!nextJob) return false;
-    await updateActiveProject({
+    await updateProjectById(project.project_id, {
       video_jobs: videoJobs.map((job) => (job.job_id === targetJob.job_id ? nextJob : job)),
     });
     return true;
@@ -3078,6 +3403,7 @@
     getProjectGalleryItems,
     getProjectPromptImports,
     getProjectPromptRecords,
+    getProjectMediaLinks,
     getProjectVideoJobs,
     getProjectVideos,
     getSelectedImageFinalizationItems,

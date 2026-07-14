@@ -390,6 +390,15 @@ ar?.querySelectorAll("[data-speed]").forEach((e) => {
         });
         globalThis.tfHandleStudioGenerationMessage?.(e, t);
       }
+      if ("PREVIEW_CACHED" === e.subType) {
+        const t = e.uiBatchId
+          ? pn(e.uiBatchId)
+          : l.activeBatchId
+            ? pn(l.activeBatchId)
+            : null;
+        globalThis.tfHandleStudioGenerationMessage?.(e, t);
+        e.mediaId && e.fileName && tfQueueGalleryCacheRepair(e.mediaId, e.fileName);
+      }
       if (
         ("DOWNLOAD_COMPLETE" === e.subType &&
           (Te(e.message, "success"),

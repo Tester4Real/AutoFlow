@@ -684,11 +684,47 @@
       return (
         (async () => {
           try {
-            const t = await tfGetCachedFrame(e.fileName);
+            const t =
+              (await tfGetCachedFrame(e.cacheKey)) ||
+              (await tfGetCachedFrame(tfFrameMediaAlias(e.mediaId))) ||
+              (await tfGetCachedFrame(e.fileName));
             r({
               ok: !!t?.base64,
               base64: t?.base64 || null,
               mimeType: t?.mimeType || "image/png",
+              cacheKey: t?.cacheKey || "",
+              fileName: t?.fileName || "",
+              cachedAt: t?.cachedAt || null,
+            });
+          } catch (e) {
+            r({ ok: !1, error: e.message });
+          }
+        })(),
+        !0
+      );
+    if ("CACHE_IMAGE_PREVIEW" === e.type)
+      return (
+        (async () => {
+          try {
+            const t = await tfCacheGeneratedImagePreview({
+              mediaId: e.mediaId,
+              fifeUrl: e.fifeUrl,
+              previewUrl: e.previewUrl,
+              fileName: e.fileName,
+              cacheKey: e.cacheKey,
+              uiBatchId: e.uiBatchId || null,
+              promptIndex: e.promptIndex,
+              includeBase64: !0,
+              notify: !1,
+            });
+            r({
+              ok: !!t?.cacheKey || !!t?.base64,
+              base64: t?.base64 || null,
+              mimeType: t?.mimeType || "image/png",
+              cacheKey: t?.cacheKey || "",
+              fileName: t?.fileName || "",
+              byteLength: t?.byteLength || 0,
+              cachedAt: t?.cachedAt || null,
             });
           } catch (e) {
             r({ ok: !1, error: e.message });

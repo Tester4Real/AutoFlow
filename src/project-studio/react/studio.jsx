@@ -1,9 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { Button, Card, Chip, Modal, ProgressBar, Toast, toast } from "@heroui/react";
 import {
   Activity,
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
   Check,
   CirclePause,
   FileJson,
@@ -40,6 +43,17 @@ const NAV_ITEMS = [
   { id: "media", label: "Media", icon: LayoutGrid },
   { id: "logs", label: "Logs", icon: Activity },
 ];
+
+function getViewFromLocationHash() {
+  const rawHash = String(globalThis.location?.hash || "").replace(/^#/, "");
+  let hash = "";
+  try {
+    hash = decodeURIComponent(rawHash);
+  } catch (error) {
+    hash = rawHash;
+  }
+  return NAV_ITEMS.some((item) => item.id === hash) ? hash : "channels";
+}
 
 class StudioErrorBoundary extends React.Component {
   state = { error: null };
@@ -88,13 +102,114 @@ function primaryAssetFile(asset) {
 
 function previewUrl(value) {
   return (
-    value?.thumbnail_url ||
     value?.data_url ||
+    value?.cache_preview_url ||
     value?.preview_url ||
+    value?.thumbnail_url ||
     value?.fife_url ||
     value?.video_url ||
     ""
   );
+}
+
+function isDataUrl(value) {
+  return String(value || "").startsWith("data:");
+}
+
+function cachedFrameDataUrl(response) {
+  if (!response?.ok || !response.base64) return "";
+  const mimeType = response.mimeType || "image/png";
+  return `data:${mimeType};base64,${response.base64}`;
+}
+
+function cacheLookupFor(value) {
+  return {
+    cacheKey: String(value?.cache_key || value?.cacheKey || "").trim(),
+    fileName: String(
+      value?.cached_file_name ||
+        value?.cachedFileName ||
+        value?.generated_file_name ||
+        value?.local_file_name ||
+        value?.expected_file_name ||
+        value?.file_name ||
+        "",
+    ).trim(),
+    mediaId: String(value?.media_id || value?.mediaId || "").trim(),
+  };
+}
+
+function sourceUrlForCache(value) {
+  return (
+    value?.fife_url ||
+    value?.thumbnail_url ||
+    value?.preview_url ||
+    value?.data_url ||
+    ""
+  );
+}
+
+function CachedPreviewImage({ value, alt, placeholderClassName = "preview-placeholder" }) {
+  const remoteSource = previewUrl(value);
+  const lookup = cacheLookupFor(value);
+  const lookupSignature = [
+    lookup.cacheKey,
+    lookup.fileName,
+    lookup.mediaId,
+    sourceUrlForCache(value),
+  ].join("|");
+  const [cachedSource, setCachedSource] = useState("");
+  const [failedSource, setFailedSource] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setCachedSource("");
+    setFailedSource("");
+
+    if (isDataUrl(remoteSource)) return () => {
+      cancelled = true;
+    };
+    if (!lookup.cacheKey && !lookup.fileName && !lookup.mediaId) return () => {
+      cancelled = true;
+    };
+
+    async function loadCachedFrame() {
+      const runtime = globalThis.chrome?.runtime;
+      if (!runtime || typeof runtime.sendMessage !== "function") return;
+      try {
+        const cached = await runtime.sendMessage({
+          type: "GET_CACHED_FRAME",
+          cacheKey: lookup.cacheKey,
+          fileName: lookup.fileName,
+          mediaId: lookup.mediaId,
+        });
+        let dataUrl = cachedFrameDataUrl(cached);
+        if (!dataUrl && (lookup.mediaId || sourceUrlForCache(value))) {
+          const repaired = await runtime.sendMessage({
+            type: "CACHE_IMAGE_PREVIEW",
+            cacheKey: lookup.cacheKey,
+            fileName: lookup.fileName,
+            mediaId: lookup.mediaId,
+            fifeUrl: sourceUrlForCache(value),
+          });
+          dataUrl = cachedFrameDataUrl(repaired);
+        }
+        if (!cancelled && dataUrl) setCachedSource(dataUrl);
+      } catch (_error) {
+        // Broken remote thumbnails should not crash Studio; the placeholder covers misses.
+      }
+    }
+
+    loadCachedFrame();
+    return () => {
+      cancelled = true;
+    };
+  }, [lookupSignature, remoteSource]);
+
+  const source = cachedSource || remoteSource;
+  if (!source || failedSource === source) {
+    return <span className={placeholderClassName}><ImageIcon size={24} /></span>;
+  }
+  return <img src={source} alt={alt} onError={() => setFailedSource(source)} />;
 }
 
 function statusColor(status) {
@@ -477,10 +592,14 @@ function ImageReviewView({ project, video, onSelect }) {
           <div className="scene-review-heading"><h3>{studioApi.sceneTitleFromFileName(record.file_name)}</h3><span>{sceneVariants.length} options</span></div>
           <div className="variant-grid">{sceneVariants.map((variant) => {
             const selected = record.selected_variant_id === variant.variant_id || variant.is_selected;
-            const source = previewUrl(variant);
             return (
               <button className={`variant-choice ${selected ? "selected" : ""}`} key={variant.variant_id} type="button" aria-pressed={selected} onClick={() => onSelect(record.prompt_id, variant.variant_id)}>
-                <span className="variant-media">{source ? <img src={source} alt={`${studioApi.sceneTitleFromFileName(record.file_name)} option ${Number(variant.variant_index || 0) + 1}`} /> : <span className="preview-placeholder"><ImageIcon size={24} /></span>}</span>
+                <span className="variant-media">
+                  <CachedPreviewImage
+                    value={variant}
+                    alt={`${studioApi.sceneTitleFromFileName(record.file_name)} option ${Number(variant.variant_index || 0) + 1}`}
+                  />
+                </span>
                 <span className="variant-label">Option {Number(variant.variant_index || 0) + 1}</span>
                 {selected ? <span className="selected-mark"><Check size={16} /></span> : null}
               </button>
@@ -492,16 +611,20 @@ function ImageReviewView({ project, video, onSelect }) {
   );
 }
 
-function VideoQueueView({ project, video, runner, onRunAll, onPause, onContinue, onQueue, onRun, onStop, onRemove, onOpenImages }) {
+function VideoQueueView({ project, video, runner, onRunAll, onPause, onContinue, onQueue, onRun, onStop, onHold, onMove, onRemove, onOpenImages }) {
   if (!video) return <EmptyState icon={ListVideo} title="Choose a video" description="Video Queue is organized one video at a time." />;
-  const items = studioApi.getVideoQueueItems(project, video.video_id).filter((item) => !!item.animation_prompt);
-  const completed = items.filter((item) => item.status === "complete").length;
+  const items = studioApi.getVideoQueueItems(project, video.video_id);
+  const runnableItems = items.filter((item) => !!item.animation_prompt);
+  const completed = runnableItems.filter((item) => item.status === "complete").length;
+  const hasRunnableWork = runnableItems.some((item) => {
+    return (item.status === "draft" && item.selected_variant_id) || item.can_run;
+  });
   const activeRunner = runner.videoId === video.video_id;
   const runnerAction = activeRunner && runner.status === "running"
     ? <Button variant="outline" onPress={onPause}><CirclePause size={17} />Pause after current</Button>
     : activeRunner && runner.status === "paused"
       ? <Button variant="primary" onPress={onContinue}><Play size={17} />Continue</Button>
-      : <Button variant="primary" isDisabled={!items.length || completed === items.length} onPress={onRunAll}><Play size={17} />Run all</Button>;
+      : <Button variant="primary" isDisabled={!hasRunnableWork || (runnableItems.length > 0 && completed === runnableItems.length)} onPress={onRunAll}><Play size={17} />Run all</Button>;
   return (
     <div className="view-stack">
       <PageHeader title="Video Queue" description={video.display_name} actions={runnerAction} />
@@ -512,17 +635,22 @@ function VideoQueueView({ project, video, runner, onRunAll, onPause, onContinue,
         </div>
       ) : null}
       {items.length ? <div className="queue-list">{items.map((item) => {
-        const canQueue = item.status === "draft" && item.selected_variant_id;
+        const canQueue = item.can_queue || item.can_create_draft;
+        const showReason = item.status === "not_ready" || item.status === "needs_review" || item.status === "failed";
+        const detailText = showReason ? item.reason : item.animation_prompt || item.reason;
         return (
           <Card key={item.prompt_id} className={`queue-card status-${item.status}`} variant="secondary">
             <Card.Content className="queue-card-content">
-              <div className="queue-preview">{item.selected_preview_url ? <img src={item.selected_preview_url} alt={item.scene_title} /> : <span className="preview-placeholder"><ImageIcon size={24} /></span>}</div>
-              <div className="queue-main"><div className="queue-title-row"><h3>{item.scene_title}</h3><Chip size="sm" color={statusColor(item.status)} variant="soft">{item.status_label}</Chip></div>{item.status === "failed" ? <p className="queue-error">{item.reason}</p> : <p>{item.animation_prompt}</p>}</div>
+              <div className="queue-preview">{item.selected_variant_id ? <CachedPreviewImage value={{ preview_url: item.selected_preview_url, cache_key: item.selected_cache_key, cached_file_name: item.selected_cached_file_name, generated_file_name: item.selected_file_name, media_id: item.selected_media_id, fife_url: item.selected_fife_url }} alt={item.scene_title} /> : <span className="preview-placeholder"><ImageIcon size={24} /></span>}</div>
+              <div className="queue-main"><div className="queue-title-row"><h3>{item.scene_title}</h3><Chip size="sm" color="accent" variant="soft">Video</Chip><Chip size="sm" color={statusColor(item.status)} variant="soft">{item.status_label}</Chip></div><p className={showReason ? "queue-error" : ""}>{detailText}</p></div>
               <div className="queue-actions">
                 {!item.selected_variant_id ? <Button size="sm" variant="outline" onPress={onOpenImages}>Select image</Button> : null}
                 {canQueue ? <Button size="sm" variant="secondary" onPress={() => onQueue(item.prompt_id)}>Add to queue</Button> : null}
                 {item.can_run || item.can_retry ? <Button size="sm" variant={item.can_retry ? "outline" : "secondary"} onPress={() => onRun(item.job_id)}>{item.can_retry ? <RefreshCw size={15} /> : <Play size={15} />}{item.can_retry ? "Retry" : "Run"}</Button> : null}
                 {item.can_stop ? <Button size="sm" variant="danger-soft" onPress={() => onStop(item.job_id)}><Square size={15} />Stop</Button> : null}
+                {item.can_hold ? <Button size="sm" variant="outline" onPress={() => onHold(item.job_id)}><CirclePause size={15} />Hold</Button> : null}
+                {item.can_move ? <Button isIconOnly size="sm" variant="ghost" aria-label={`Move ${item.scene_title} up`} onPress={() => onMove(item.job_id, "up")}><ArrowUp size={15} /></Button> : null}
+                {item.can_move ? <Button isIconOnly size="sm" variant="ghost" aria-label={`Move ${item.scene_title} down`} onPress={() => onMove(item.job_id, "down")}><ArrowDown size={15} /></Button> : null}
                 {item.can_remove ? <Button isIconOnly size="sm" variant="ghost" aria-label={`Remove ${item.scene_title} from queue`} onPress={() => onRemove(item.job_id)}><Trash2 size={15} /></Button> : null}
               </div>
             </Card.Content>
@@ -541,7 +669,7 @@ function MediaView({ project, video, onFinalize, onSync, busy }) {
   return (
     <div className="view-stack">
       <PageHeader title="Media" description={video.display_name} actions={<><Button variant="outline" isDisabled={busy} onPress={() => folderInput.current?.click()}><FolderSync size={17} />Sync folder</Button><Button variant="primary" isDisabled={busy} onPress={onFinalize}>Finalize selected</Button><input ref={folderInput} type="file" hidden multiple webkitdirectory="" onChange={(event) => onSync(event.target.files)} /></>} />
-      {media.length ? <div className="media-grid">{media.map((item) => <Card key={`${item.type}:${item.id}`} className="media-card" variant="secondary"><Card.Content>{item.type === "video" && item.video_url ? <video controls preload="metadata" src={item.video_url} /> : item.preview_url ? <img src={item.preview_url} alt={studioApi.sceneTitleFromFileName(item.prompt_file_name)} /> : <span className="media-placeholder"><ImageIcon size={24} /></span>}<strong>{studioApi.sceneTitleFromFileName(item.prompt_file_name || item.output_file_name)}</strong><Chip size="sm" color={statusColor(item.is_selected ? "complete" : "draft")} variant="soft">{item.status_label}</Chip></Card.Content></Card>)}</div> : <EmptyState icon={LayoutGrid} title="No media yet" description="Selected images and completed videos appear here." />}
+      {media.length ? <div className="media-grid">{media.map((item) => <Card key={`${item.type}:${item.id}`} className="media-card" variant="secondary"><Card.Content>{item.type === "video" && item.video_url ? <video controls preload="metadata" src={item.video_url} /> : item.type === "image" ? <CachedPreviewImage value={item} alt={studioApi.sceneTitleFromFileName(item.prompt_file_name)} placeholderClassName="media-placeholder" /> : <span className="media-placeholder"><ImageIcon size={24} /></span>}<strong>{studioApi.sceneTitleFromFileName(item.prompt_file_name || item.output_file_name)}</strong><Chip size="sm" color={statusColor(item.is_selected ? "complete" : "draft")} variant="soft">{item.status_label}</Chip></Card.Content></Card>)}</div> : <EmptyState icon={LayoutGrid} title="No media yet" description="Selected images and completed videos appear here." />}
     </div>
   );
 }
@@ -560,7 +688,7 @@ function LogsView({ logs, onClear }) {
 
 function StudioApp() {
   const [snapshot, setSnapshot] = useState(() => captureStudioState());
-  const [view, setView] = useState("channels");
+  const [view, setView] = useState(() => getViewFromLocationHash());
   const [activeVideoId, setActiveVideoId] = useState("");
   const [busy, setBusy] = useState("");
   const [dialog, setDialog] = useState(null);
@@ -596,6 +724,12 @@ function StudioApp() {
     }
   }, [videos, activeVideoId]);
 
+  useEffect(() => {
+    const syncViewFromHash = () => setView(getViewFromLocationHash());
+    globalThis.addEventListener?.("hashchange", syncViewFromHash);
+    return () => globalThis.removeEventListener?.("hashchange", syncViewFromHash);
+  }, []);
+
   const setRunnerState = useCallback((next) => {
     const value = typeof next === "function" ? next(runnerRef.current) : next;
     runnerRef.current = value;
@@ -616,14 +750,14 @@ function StudioApp() {
       let currentProject = studioApi.getState().activeProject;
       let items = studioApi.getVideoQueueItems(currentProject, videoId).filter((item) => !!item.animation_prompt);
       for (const item of items) {
-        if (item.status === "draft" && item.selected_variant_id) {
+        if ((item.status === "draft" && item.selected_variant_id) || item.can_create_draft) {
           await studioApi.queuePromptVideo(item.prompt_id);
         }
       }
       await studioApi.loadProjectState();
       currentProject = studioApi.getState().activeProject;
       items = studioApi.getVideoQueueItems(currentProject, videoId).filter((item) => !!item.animation_prompt);
-      const next = items.find((item) => item.status === "failed") || items.find((item) => item.status === "ready");
+      const next = items.find((item) => item.status === "ready");
       if (!next) {
         setRunnerState({ status: "idle", videoId, currentJobId: "", error: "" });
         capture();
@@ -678,6 +812,20 @@ function StudioApp() {
     }
   }
 
+  async function stopVideo(jobId) {
+    const result = await action("stop", () => studioApi.stopVideoJob(jobId), "Video stopped");
+    const current = runnerRef.current;
+    if (current.currentJobId === jobId) {
+      setRunnerState({
+        ...current,
+        status: "paused",
+        currentJobId: "",
+        error: "Stopped by user.",
+      });
+    }
+    return result;
+  }
+
   async function selectProject(projectId) {
     await action("project", () => studioApi.setActiveProject(projectId));
     setActiveVideoId("");
@@ -712,7 +860,7 @@ function StudioApp() {
   } else if (view === "images") {
     content = <ImageReviewView project={project} video={activeVideo} onSelect={(promptId, variantId) => action("select-image", () => studioApi.selectImageVariant(promptId, variantId), "Image selected")} />;
   } else if (view === "video") {
-    content = <VideoQueueView project={project} video={activeVideo} runner={runner} onRunAll={() => { const next = { status: "running", videoId: activeVideo.video_id, currentJobId: "", error: "" }; setRunnerState(next); runNext(activeVideo.video_id); }} onPause={() => setRunnerState((current) => ({ ...current, status: "paused", error: "Paused after the current job." }))} onContinue={() => { setRunnerState((current) => ({ ...current, status: "running", error: "" })); runNext(activeVideo.video_id); }} onQueue={(promptId) => action("queue", () => studioApi.queuePromptVideo(promptId), "Added to queue")} onRun={(jobId) => action("run", () => studioApi.runVideoJob(jobId), "Video started")} onStop={(jobId) => action("stop", () => studioApi.stopVideoJob(jobId), "Video stopped")} onRemove={(jobId) => action("remove", () => studioApi.removeVideoJob(jobId), "Removed from queue")} onOpenImages={() => setView("images")} />;
+    content = <VideoQueueView project={project} video={activeVideo} runner={runner} onRunAll={() => { const next = { status: "running", videoId: activeVideo.video_id, currentJobId: "", error: "" }; setRunnerState(next); runNext(activeVideo.video_id); }} onPause={() => setRunnerState((current) => ({ ...current, status: "paused", error: "Paused after the current job." }))} onContinue={() => { setRunnerState((current) => ({ ...current, status: "running", error: "" })); runNext(activeVideo.video_id); }} onQueue={(promptId) => action("queue", () => studioApi.queuePromptVideo(promptId), "Added to queue")} onRun={(jobId) => action("run", () => studioApi.runVideoJob(jobId), "Video started")} onStop={stopVideo} onHold={(jobId) => action("hold", () => studioApi.holdVideoJob(jobId), "Video held")} onMove={(jobId, direction) => action(`move-${direction}`, () => studioApi.moveVideoJob(jobId, direction))} onRemove={(jobId) => action("remove", () => studioApi.removeVideoJob(jobId), "Removed from queue")} onOpenImages={() => setView("images")} />;
   } else if (view === "media") {
     content = <MediaView project={project} video={activeVideo} busy={!!busy} onFinalize={() => action("finalize", () => studioApi.finalizeSelectedImages(), "Selected images finalized")} onSync={(files) => action("sync", () => studioApi.syncProjectMediaFromFiles(files), "Folder synced")} />;
   } else {
@@ -720,7 +868,7 @@ function StudioApp() {
   }
 
   return (
-    <Toast.Provider placement="top-end">
+    <>
       <div className="studio-shell">
         <aside className="studio-sidebar">
           <div className="studio-brand"><span className="brand-symbol"><Video size={20} /></span><div><strong>AutoFlow</strong><span>Studio</span></div></div>
@@ -743,10 +891,17 @@ function StudioApp() {
       <AssetDialog open={modal === "asset-add" || modal === "asset-edit"} mode={modal === "asset-edit" ? "edit" : "add"} asset={currentAsset} onOpenChange={(open) => !open && setDialog(null)} busy={busy === "asset-save"} onSave={({ name, file }) => action("asset-save", async () => { if (modal === "asset-add") return studioApi.createAssetWithFile({ display_name: name }, [file]); await studioApi.updateAsset(currentAsset.asset_id, { display_name: name }); if (file) await studioApi.replaceAssetFile(currentAsset.asset_id, [file]); }, "Asset saved").then(() => setDialog(null))} />
       <ConfirmDialog open={modal === "asset-delete"} title="Delete asset?" description={`Delete ${currentAsset?.display_name || "this asset"}? Scenes using it will return to Needs Reference.`} onOpenChange={(open) => !open && setDialog(null)} busy={busy === "asset-delete"} onConfirm={() => action("asset-delete", () => studioApi.deleteAsset(currentAsset.asset_id), "Asset deleted").then(() => setDialog(null))} />
       <ConfirmDialog open={modal === "video-delete"} title="Delete video?" description={`Delete ${currentVideo?.display_name || "this video"} and its scenes, generated images, and video jobs?`} onOpenChange={(open) => !open && setDialog(null)} busy={busy === "video-delete"} onConfirm={() => action("video-delete", () => studioApi.deleteProjectVideo(currentVideo.video_id), "Video deleted").then(() => { setActiveVideoId(""); setDialog(null); })} />
-    </Toast.Provider>
+      <Toast.Provider placement="top-end" />
+    </>
   );
 }
 
 const container = document.getElementById("studio-root");
 if (!container) throw new Error("Studio root is missing.");
-createRoot(container).render(<StudioErrorBoundary><StudioApp /></StudioErrorBoundary>);
+globalThis.__TF_STUDIO_BUNDLE_LOADED = true;
+const root = createRoot(container);
+globalThis.__TF_STUDIO_RENDER_REQUESTED = true;
+flushSync(() => {
+  root.render(<StudioErrorBoundary><StudioApp /></StudioErrorBoundary>);
+});
+globalThis.__TF_STUDIO_MOUNT_COMMITTED = true;

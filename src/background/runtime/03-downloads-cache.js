@@ -39,53 +39,139 @@ function tfNormalizeFramePath(e, t = "png") {
   a.push(`${r}.${t}`);
   return a.join("/");
 }
+const TF_FRAME_CACHE_DB_VERSION = 2;
 let tfFrameCacheDbPromise = null;
 function tfFrameCacheDb() {
   if (tfFrameCacheDbPromise) return tfFrameCacheDbPromise;
   tfFrameCacheDbPromise = new Promise((e, t) => {
-    const a = indexedDB.open("turboflow-frame-cache", 1);
+    const a = indexedDB.open("turboflow-frame-cache", TF_FRAME_CACHE_DB_VERSION);
     ((a.onupgradeneeded = () => {
       const e = a.result;
       e.objectStoreNames.contains("frames") ||
         e.createObjectStore("frames", { keyPath: "key" });
+      e.objectStoreNames.contains("frameAliases") ||
+        e.createObjectStore("frameAliases", { keyPath: "key" });
     }),
       (a.onsuccess = () => e(a.result)),
       (a.onerror = () => t(a.error || new Error("Frame cache open failed"))));
   });
   return tfFrameCacheDbPromise;
 }
-async function tfCacheFrameBase64(e, t, a = "image/png") {
+function tfFrameCacheStoreExists(e, t) {
+  return !!e?.objectStoreNames && e.objectStoreNames.contains(t);
+}
+function tfFrameMediaAlias(e) {
+  const t = String(e || "").trim();
+  return t ? `media:${t}`.toLowerCase() : "";
+}
+function tfFrameHashAlias(e) {
+  const t = String(e || "").trim().toLowerCase();
+  return t ? (t.startsWith("sha256:") ? t : `sha256:${t}`) : "";
+}
+function tfFrameCacheLookupCandidates(e) {
+  const t = [];
+  const a = String(e || "").trim().toLowerCase();
   const r = tfNormalizeFramePath(e, "png");
-  if (!r || !t) return;
+  a && t.push(a);
+  r && t.push(r.toLowerCase());
+  return Array.from(new Set(t.filter(Boolean)));
+}
+function tfDataUrlBase64(e) {
+  const t = String(e || "");
+  const a = t.indexOf(",");
+  return a >= 0 ? t.slice(a + 1) : t;
+}
+function tfBase64ByteLength(e) {
+  const t = String(e || "").replace(/\s+/g, "");
+  if (!t) return 0;
+  const a = t.endsWith("==") ? 2 : t.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((t.length * 3) / 4) - a);
+}
+async function tfSha256Base64(e) {
+  if (!globalThis.crypto?.subtle || typeof atob !== "function") return "";
+  const t = atob(String(e || ""));
+  const a = new Uint8Array(t.length);
+  for (let e = 0; e < t.length; e++) a[e] = t.charCodeAt(e);
+  const r = await globalThis.crypto.subtle.digest("SHA-256", a);
+  return Array.from(new Uint8Array(r))
+    .map((e) => e.toString(16).padStart(2, "0"))
+    .join("");
+}
+function tfIdbGet(e, t, a) {
+  if (!tfFrameCacheStoreExists(e, t) || !a) return Promise.resolve(null);
+  return new Promise((r, o) => {
+    const n = e.transaction(t, "readonly"),
+      i = n.objectStore(t).get(a);
+    ((i.onsuccess = () => r(i.result || null)),
+      (i.onerror = () => o(i.error || new Error("Frame cache read failed"))));
+  });
+}
+function tfWriteCachedFrame(e, t, a) {
+  return new Promise((r, o) => {
+    const n = e.transaction(["frames", "frameAliases"], "readwrite");
+    n.objectStore("frames").put(t);
+    a.forEach((e) => n.objectStore("frameAliases").put(e));
+    ((n.oncomplete = () => r()),
+      (n.onerror = () => o(n.error || new Error("Frame cache write failed"))));
+  });
+}
+async function tfCacheFrameBase64(e, t, a = "image/png", r = {}) {
+  const o = tfNormalizeFramePath(e, "png"),
+    n = tfDataUrlBase64(t),
+    i = tfFrameMediaAlias(r.mediaId),
+    s = await tfSha256Base64(n).catch(() => ""),
+    c = tfFrameHashAlias(s),
+    l = o ? o.toLowerCase() : "",
+    d = i || c || l;
+  if (!d || !n) return null;
   try {
-    const e = await tfFrameCacheDb();
-    await new Promise((o, n) => {
-      const i = e.transaction("frames", "readwrite");
-      (i.objectStore("frames").put({
-        key: r.toLowerCase(),
-        fileName: r,
-        base64: t,
-        mimeType: a,
-        cachedAt: Date.now(),
-      }),
-        (i.oncomplete = () => o()),
-        (i.onerror = () => n(i.error || new Error("Frame cache write failed"))));
-    });
-    Yt(`Cached local frame ${r}`, "info");
+    const t = await tfFrameCacheDb(),
+      u = Date.now(),
+      p = {
+        key: d,
+        fileName: o || String(e || "").trim() || `${String(r.mediaId || "frame")}.png`,
+        base64: n,
+        mimeType: a || r.mimeType || "image/png",
+        mediaId: String(r.mediaId || "").trim(),
+        cacheKey: c,
+        byteLength: tfBase64ByteLength(n),
+        width: Number(r.width || 0) || null,
+        height: Number(r.height || 0) || null,
+        sourceUrl: r.sourceUrl || "",
+        cachedAt: u,
+      },
+      m = Array.from(new Set([l, i, c].filter(Boolean)))
+        .filter((e) => e !== d)
+        .map((e) => ({ key: e, frameKey: d, updatedAt: u }));
+    await tfWriteCachedFrame(t, p, m);
+    Yt(`Cached local frame ${p.fileName}`, "info");
+    return {
+      cacheKey: p.cacheKey,
+      fileName: p.fileName,
+      mimeType: p.mimeType,
+      byteLength: p.byteLength,
+      cachedAt: p.cachedAt,
+      mediaId: p.mediaId,
+    };
   } catch (e) {
     Yt(`Frame cache skipped: ${e.message}`, "warn");
+    return null;
   }
 }
 async function tfGetCachedFrame(e) {
-  const t = tfNormalizeFramePath(e, "png");
-  if (!t) return null;
+  const t = tfFrameCacheLookupCandidates(e);
+  if (!t.length) return null;
   const a = await tfFrameCacheDb();
-  return await new Promise((e, r) => {
-    const o = a.transaction("frames", "readonly"),
-      n = o.objectStore("frames").get(t.toLowerCase());
-    ((n.onsuccess = () => e(n.result || null)),
-      (n.onerror = () => r(n.error || new Error("Frame cache read failed"))));
-  });
+  for (const e of t) {
+    const t = await tfIdbGet(a, "frames", e);
+    if (t?.base64) return t;
+    const r = await tfIdbGet(a, "frameAliases", e);
+    if (r?.frameKey) {
+      const e = await tfIdbGet(a, "frames", r.frameKey);
+      if (e?.base64) return e;
+    }
+  }
+  return null;
 }
 async function tfUploadCachedFrame(e) {
   const t = await tfGetCachedFrame(e);
@@ -93,6 +179,110 @@ async function tfUploadCachedFrame(e) {
   const a = t.fileName.split("/").pop() || "frame.png",
     r = await tt(t.base64, a, t.mimeType || "image/png");
   return { mediaId: r, fileName: t.fileName, mimeType: t.mimeType || "image/png" };
+}
+async function tfCaptureGeneratedImagePreview(e, t) {
+  if (!c || !chrome.scripting?.executeScript) {
+    throw new Error("Flow tab unavailable for preview cache");
+  }
+  const a = [
+    e
+      ? `https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=${encodeURIComponent(e)}`
+      : "",
+    t || "",
+  ].filter(Boolean);
+  if (!a.length) throw new Error("No image URL available for preview cache");
+  const r = await chrome.scripting.executeScript({
+      target: { tabId: c },
+      world: "MAIN",
+      func: async (e) => {
+        async function t(e) {
+          return await new Promise((t) => {
+            const a = new Image();
+            ((a.crossOrigin = "anonymous"),
+              (a.onload = () => {
+                try {
+                  const r = document.createElement("canvas");
+                  ((r.width = a.naturalWidth),
+                    (r.height = a.naturalHeight),
+                    r.getContext("2d").drawImage(a, 0, 0));
+                  const o = r.width || 0,
+                    n = r.height || 0;
+                  r.toBlob((a) => {
+                    if (!a) return void t({ error: "Canvas toBlob failed" });
+                    const r = new FileReader();
+                    ((r.onloadend = () =>
+                      t({
+                        base64: String(r.result || "").split(",")[1] || "",
+                        mimeType: a.type || "image/png",
+                        width: o,
+                        height: n,
+                        byteLength: a.size || 0,
+                        sourceUrl: e,
+                      })),
+                      (r.onerror = () => t({ error: "Preview read failed" })),
+                      r.readAsDataURL(a));
+                  }, "image/png");
+                } catch (e) {
+                  t({ error: e.message || "Canvas capture failed" });
+                }
+              }),
+              (a.onerror = () => t({ error: "Image load failed" })),
+              (a.src = e));
+          });
+        }
+        let a = "";
+        for (const r of e) {
+          const e = await t(r);
+          if (e?.base64) return e;
+          a = e?.error || "Image capture failed";
+        }
+        return { error: a || "Image capture failed" };
+      },
+      args: [a],
+    }),
+    o = r?.[0]?.result;
+  if (!o?.base64) throw new Error(o?.error || "Preview cache capture failed");
+  return o;
+}
+async function tfCacheGeneratedImagePreview(e = {}) {
+  const t = String(e.mediaId || "").trim(),
+    a = String(e.fileName || "").trim() || (t ? `${t}.png` : ""),
+    r = e.cacheKey || tfFrameMediaAlias(t) || a,
+    o = r ? await tfGetCachedFrame(r).catch(() => null) : null;
+  if (o?.base64) {
+    return {
+      cacheKey: o.cacheKey || "",
+      fileName: o.fileName || a,
+      mimeType: o.mimeType || "image/png",
+      byteLength: o.byteLength || tfBase64ByteLength(o.base64),
+      cachedAt: o.cachedAt || null,
+      mediaId: o.mediaId || t,
+      base64: e.includeBase64 ? o.base64 : null,
+    };
+  }
+  const n = await tfCaptureGeneratedImagePreview(t, e.fifeUrl || e.previewUrl || "");
+  const i = await tfCacheFrameBase64(a, n.base64, n.mimeType || "image/png", {
+    mediaId: t,
+    width: n.width,
+    height: n.height,
+    sourceUrl: n.sourceUrl || e.fifeUrl || "",
+  });
+  if (i && e.notify !== false) {
+    zt("PREVIEW_CACHED", {
+      mediaId: t,
+      promptIndex: e.promptIndex,
+      mediaType: "image",
+      uiBatchId: e.uiBatchId || null,
+      fileName: i.fileName || a,
+      cacheKey: i.cacheKey || "",
+      cachedFileName: i.fileName || a,
+      mimeType: i.mimeType || "image/png",
+      byteLength: i.byteLength || 0,
+    });
+  }
+  return i
+    ? Object.assign({}, i, { base64: e.includeBase64 ? n.base64 : null })
+    : null;
 }
 function tfExactDownloadName(e, t, a, r, o = null) {
   const n = e?.perPromptFileNames?.[t];
@@ -818,6 +1008,10 @@ function zt(e, t) {
     videoUrl: t.videoUrl || null,
     workflowId: t.workflowId || null,
     fileName: t.fileName || null,
+    cacheKey: t.cacheKey || null,
+    cachedFileName: t.cachedFileName || null,
+    mimeType: t.mimeType || null,
+    byteLength: t.byteLength || 0,
     totalPrompts: t.totalPrompts,
     successfulPrompts: t.successfulPrompts,
     failedPrompts: t.failedPrompts,

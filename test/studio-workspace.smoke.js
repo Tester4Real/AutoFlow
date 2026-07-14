@@ -98,6 +98,8 @@ function createContext(storage) {
   loadScript(context, "src/shared/project-domain/00-project-domain.js");
   loadScript(context, "src/shared/project-domain/01-project-json-contract.js");
   loadScript(context, "src/shared/project-domain/02-project-prompt-import.js");
+  loadScript(context, "src/shared/project-services/project-schema.js");
+  loadScript(context, "src/shared/project-services/media-link-contracts.js");
   loadScript(context, "src/project-studio/app/00-studio-state.js");
   return context;
 }
@@ -143,6 +145,7 @@ async function run() {
         {
           file_name: "budget_chart.png",
           image_prompt: "A clean budget chart",
+          animation_prompt: "Budget bars rise into place.",
         },
       ],
     }),
@@ -164,6 +167,68 @@ async function run() {
   const firstVideoId = project.prompt_imports[0].import_id;
   const secondVideoId = project.prompt_imports[1].import_id;
   const firstPromptId = firstImport.records[0].prompt_id;
+  const secondPromptId = firstImport.records[1].prompt_id;
+  await studio.loadProjectState();
+  const imageRun = await studio.startImageGenerationRun();
+  const firstCacheKey = `sha256:${"b".repeat(64)}`;
+  const recorded = await studio.recordImageGenerationRunVariants(imageRun.run.image_run_id, [
+    {
+      prompt_id: firstPromptId,
+      variants: [
+        {
+          variant_index: 0,
+          media_id: "flow-media-recorded",
+          cache_key: firstCacheKey,
+          cached_file_name: "scenes/jack_checks_his_budget__1.png",
+          fife_url: "https://example.test/preview.png",
+          status: "available",
+        },
+      ],
+    },
+  ]);
+  project = studio.getState().activeProject;
+  const recordedVariant = recorded.variants.find(
+    (variant) => variant.media_id === "flow-media-recorded",
+  );
+  assert.ok(recordedVariant);
+  assert.ok(
+    studio.getProjectMediaLinks(project).some((link) => {
+      return link.owner_id === recordedVariant.variant_id && link.cache_key === firstCacheKey;
+    }),
+  );
+
+  const repairedCacheKey = `sha256:${"c".repeat(64)}`;
+  assert.equal(
+    await studio.handleVideoRuntimeMessage({
+      type: "FROM_BACKGROUND",
+      subType: "PREVIEW_CACHED",
+      uiBatchId: imageRun.run.image_run_id,
+      mediaId: "flow-media-recorded",
+      cacheKey: repairedCacheKey,
+      cachedFileName: "scenes/jack_checks_his_budget__1.png",
+      cachedAt: 1234,
+    }),
+    true,
+  );
+  project = studio.getState().activeProject;
+  const cachedVariant = project.image_variants.find(
+    (variant) => variant.variant_id === recordedVariant.variant_id,
+  );
+  assert.equal(cachedVariant.cache_key, repairedCacheKey);
+  assert.equal(cachedVariant.cached_file_name, "scenes/jack_checks_his_budget__1.png");
+  assert.equal(cachedVariant.file_state, "available");
+  assert.ok(
+    studio.getProjectMediaLinks(project).some((link) => {
+      return (
+        link.owner_id === recordedVariant.variant_id &&
+        link.cache_key === repairedCacheKey &&
+        link.flow_media_id === "flow-media-recorded"
+      );
+    }),
+  );
+
+  domainState = await domain.load();
+  project = domainState.projects[0];
   const firstVariant = {
     variant_id: "variant_budget_1",
     prompt_id: firstPromptId,
@@ -176,13 +241,29 @@ async function run() {
     status: "available",
     is_selected: true,
   };
+  const secondVariant = {
+    variant_id: "variant_budget_2",
+    prompt_id: secondPromptId,
+    variant_index: 0,
+    file_name: "budget_chart.png",
+    generated_file_name: "budget_chart.png",
+    thumbnail_url: "data:image/png;base64,Y2hhcnQ=",
+    media_id: "flow-media-2",
+    flow_context_id: "flow-context-1",
+    status: "available",
+    is_selected: true,
+  };
   await domain.updateProject(project.project_id, {
-    prompt_records: project.prompt_records.map((record) =>
-      record.prompt_id === firstPromptId
-        ? Object.assign({}, record, { selected_variant_id: firstVariant.variant_id })
-        : record,
-    ),
-    image_variants: [firstVariant],
+    prompt_records: project.prompt_records.map((record) => {
+      if (record.prompt_id === firstPromptId) {
+        return Object.assign({}, record, { selected_variant_id: firstVariant.variant_id });
+      }
+      if (record.prompt_id === secondPromptId) {
+        return Object.assign({}, record, { selected_variant_id: secondVariant.variant_id });
+      }
+      return record;
+    }),
+    image_variants: [firstVariant, secondVariant],
   });
 
   await studio.loadProjectState();
@@ -217,6 +298,23 @@ async function run() {
   firstQueue = studio.getVideoQueueItems(project, firstVideoId);
   assert.equal(firstQueue[0].status, "ready");
   assert.equal(firstQueue[0].can_run, true);
+  assert.equal(firstQueue[1].status, "draft");
+
+  const secondQueuedJob = await studio.queuePromptVideo(secondPromptId);
+  assert.equal(secondQueuedJob.status, "ready");
+  project = studio.getState().activeProject;
+  firstQueue = studio.getVideoQueueItems(project, firstVideoId);
+  assert.deepEqual(
+    firstQueue.filter((item) => item.status === "ready").map((item) => item.prompt_id),
+    [firstPromptId, secondPromptId],
+  );
+  await studio.moveVideoJob(secondQueuedJob.job_id, "up");
+  project = studio.getState().activeProject;
+  firstQueue = studio.getVideoQueueItems(project, firstVideoId);
+  assert.deepEqual(
+    firstQueue.filter((item) => item.status === "ready").map((item) => item.prompt_id),
+    [secondPromptId, firstPromptId],
+  );
 
   const assetCount = project.assets.length;
   const newAsset = await studio.createAssetWithFile(
@@ -262,6 +360,7 @@ async function run() {
   await studio.deleteProjectVideo(secondVideoId);
   project = studio.getState().activeProject;
   assert.equal(studio.getProjectVideos(project).some((video) => video.video_id === secondVideoId), false);
+  assert.equal(project.prompt_records.some((record) => record.prompt_id === firstPromptId), true);
   assert.equal(
     project.prompt_records.some((record) => record.prompt_id === secondImport.records[0].prompt_id),
     false,
@@ -276,9 +375,21 @@ async function run() {
     "utf8",
   );
   assert.match(studioSource, /from "@heroui\/react"/);
-  assert.doesNotMatch(studioSource, /Create Draft/);
-  assert.match(studioSource, /items\.find\(\(item\) => item\.status === "failed"\)/);
+  assert.doesNotMatch(studioSource, /Create Draft|Update Draft|Create New Draft|onDraft|create_label/);
+  assert.doesNotMatch(studioSource, /getVideoQueueItems\(project, video\.video_id\)\.filter\(\(item\) => !!item\.animation_prompt\)/);
+  assert.match(studioSource, /item\.status === "not_ready"/);
+  assert.match(studioSource, /studioApi\.holdVideoJob/);
+  assert.match(studioSource, /studioApi\.moveVideoJob/);
+  assert.match(studioSource, /item\.can_create_draft/);
+  assert.match(studioSource, /studioApi\.queuePromptVideo/);
+  assert.match(studioSource, /current\.currentJobId === jobId/);
+  assert.match(studioSource, />Video<\/Chip>/);
+  assert.match(studioSource, /items\.find\(\(item\) => item\.status === "ready"\)/);
+  assert.doesNotMatch(studioSource, /items\.find\(\(item\) => item\.status === "failed"\)/);
   assert.match(studioSource, /appendStudioLog\(`Video queue paused:/);
+  assert.match(studioSource, /getViewFromLocationHash/);
+  assert.match(studioSource, /useState\(\(\) => getViewFromLocationHash\(\)\)/);
+  assert.match(studioSource, /hashchange/);
   assert.match(studioHtml, /generated\/studio\.bundle\.js/);
   assert.doesNotMatch(studioHtml, /01-studio-shell\.js|07-studio-boot\.js|details-inspector/);
 

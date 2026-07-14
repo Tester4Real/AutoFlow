@@ -35,14 +35,47 @@ async function run() {
         flow_upload_state: "none",
       },
     ],
+    prompt_imports: [
+      {
+        import_id: "import_jack_talks_money",
+        source_name: "Jack Talks Money",
+        record_count: 1,
+      },
+    ],
     prompt_records: [
-      { prompt_id: "prompt_1", file_name: "scene.png", image_prompt: "Jack at work" },
+      {
+        prompt_id: "prompt_1",
+        file_name: "scene.png",
+        image_prompt: "Jack at work",
+        status: "ready",
+        can_generate_images: true,
+        source: { import_id: "import_jack_talks_money", source_name: "Jack Talks Money" },
+      },
     ],
     image_generation_runs: [],
     image_variants: [],
+    video_jobs: [],
+    media_links: [],
   };
   let uploadCount = 0;
   let idCount = 0;
+  const elements = new Map();
+  function element(selector) {
+    if (!elements.has(selector)) {
+      elements.set(selector, {
+        attributes: {},
+        disabled: false,
+        innerHTML: "",
+        style: {},
+        textContent: "",
+        value: "",
+        setAttribute(name, value) {
+          this.attributes[name] = value;
+        },
+      });
+    }
+    return elements.get(selector);
+  }
   const domain = {
     async load() {
       return { active_project_id: project.project_id, projects: [project] };
@@ -71,7 +104,24 @@ async function run() {
     String,
     console,
     TFProjectDomain: domain,
+    l: {
+      settings: {
+        imageCount: 2,
+        imageModel: "NARWHAL",
+        imageRatio: "IMAGE_ASPECT_RATIO_LANDSCAPE",
+      },
+    },
     Oe: async () => true,
+    async tfImportPromptIndexJson(_content, fileName, options) {
+      assert.equal(options.createLegacyBatches, false);
+      return {
+        import_record: {
+          import_id: "import_jack_talks_money",
+          source_name: fileName,
+        },
+        records: JSON.parse(JSON.stringify(project.prompt_records)),
+      };
+    },
     tfCurrentFlowProjectId: async () => "flow_project_1",
     X() {},
     Sn() {},
@@ -115,8 +165,8 @@ async function run() {
     document: {
       readyState: "loading",
       addEventListener() {},
-      querySelector() {
-        return null;
+      querySelector(selector) {
+        return elements.has(selector) ? elements.get(selector) : null;
       },
       querySelectorAll() {
         return [];
@@ -190,8 +240,97 @@ async function run() {
   );
   assert.equal(generatedVariant.prompt_id, "prompt_1");
   assert.equal(generatedVariant.thumbnail_url, "https://example.test/preview.jpg");
+  assert.equal(generatedVariant.flow_context_id, "flow:flow_project_1");
   assert.equal(generatedVariant.status, "available");
+  assert.equal(generatedVariant.cache_state, "pending");
+  assert.equal(project.current_flow_context_id, "flow:flow_project_1");
+  assert.equal(project.flow_context.project_id, "flow_project_1");
   assert.equal(project.image_generation_runs[0].status, "generating");
+
+  await context.tfHandleStudioGenerationMessage(
+    {
+      subType: "PREVIEW_CACHED",
+      mediaType: "image",
+      mediaId: "generated_media_1",
+      cacheKey: "sha256:abc123",
+      cachedFileName: "scene.png",
+      mimeType: "image/png",
+      byteLength: 1234,
+    },
+    batch,
+  );
+  const cachedVariant = project.image_variants.find(
+    (variant) => variant.media_id === "generated_media_1",
+  );
+  assert.equal(cachedVariant.cache_key, "sha256:abc123");
+  assert.equal(cachedVariant.cached_file_name, "scene.png");
+  assert.equal(cachedVariant.cache_mime_type, "image/png");
+  assert.equal(cachedVariant.cache_byte_length, 1234);
+  assert.equal(cachedVariant.cache_state, "available");
+  assert.equal(cachedVariant.file_state, "cached");
+
+  project.video_jobs = [
+    {
+      job_id: "job_1",
+      prompt_id: "prompt_1",
+      output_media_id: "generated_media_1",
+      status: "ready",
+    },
+  ];
+  project.media_links = [
+    {
+      media_link_id: "media_link_1",
+      owner_type: "image_variant",
+      owner_id: generatedVariant.variant_id,
+      flow_media_id: "generated_media_1",
+      cache_key: "sha256:abc123",
+    },
+  ];
+  const unsafeRemoval = await context.tfRemoveGenerateJson({ skipConfirm: true });
+  assert.equal(unsafeRemoval.removed_count, 0);
+  assert.equal(project.prompt_imports.length, 1);
+  assert.equal(project.prompt_records.length, 1);
+
+  [
+    "#generate-image-model",
+    "#setting-image-model",
+    "#ratio-select",
+    "#variants-value",
+    "#generate-json-entry",
+    "#generate-json-entry-status",
+    "#generate-json-summary",
+    "#generate-form",
+    "#generate-actions",
+    "#generate-blocked-row",
+    "#generate-json-name",
+    "#generate-json-meta",
+    "#generate-json-stats",
+    "#generate-blocked-text",
+    "#btn-add-to-queue",
+    "#btn-generate",
+    "#btn-import-json-generate",
+    "#btn-replace-json",
+    "#btn-remove-json",
+  ].forEach(element);
+  context.tfRefreshGenerateSurface();
+  assert.equal(element("#generate-json-summary").style.display, "none");
+  assert.equal(element("#generate-json-entry").style.display, "");
+  assert.equal(element("#btn-generate").disabled, true);
+
+  await context.tfHandleGenerateJsonFile("{}", "jack-video.json");
+  assert.equal(element("#generate-json-name").textContent, "jack-video.json");
+  assert.notEqual(element("#generate-json-name").textContent, project.display_name);
+  assert.equal(element("#generate-json-summary").style.display, "");
+  assert.equal(element("#btn-generate").disabled, false);
+
+  const removal = await context.tfRemoveGenerateJson({ skipConfirm: true });
+  assert.equal(removal.removed_count, 1);
+  assert.deepEqual(project.prompt_imports, []);
+  assert.deepEqual(project.prompt_records, []);
+  assert.deepEqual(project.image_generation_runs, []);
+  assert.deepEqual(project.image_variants, []);
+  assert.deepEqual(project.video_jobs, []);
+  assert.deepEqual(project.media_links, []);
 
   console.log("generate surface smoke tests passed");
 }

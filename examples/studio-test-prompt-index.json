@@ -1,0 +1,34 @@
+{
+  "prompts": [
+    {
+      "file_name": "studio-test/scene_001_budget_alert.png",
+      "image_prompt": "A clean 2D animated finance scene of a young creator at a desk noticing a budget alert on a laptop, modern apartment background, expressive but simple character design, cinematic 16:9 composition, bright readable details",
+      "animation_prompt": "Slow push-in toward the laptop as the budget alert glows and the creator leans forward with concern.",
+      "references": ["Jack"]
+    },
+    {
+      "file_name": "studio-test/scene_002_expense_map.png",
+      "image_prompt": "A clean 2D animated finance scene showing the same creator organizing colorful expense cards on a wall map, rent groceries subscriptions and savings labels, tidy room, optimistic mood, cinematic 16:9 composition",
+      "animation_prompt": "Camera slides across the wall map while expense cards pop into neat groups and the creator points at the savings section.",
+      "references": ["Jack"]
+    },
+    {
+      "file_name": "studio-test/scene_003_hidden_fee.png",
+      "image_prompt": "A clean 2D animated finance scene of a phone screen revealing a hidden fee in a bank app, creator in the background looking surprised, sharp readable UI shapes, modern blue and green accents, cinematic 16:9 composition",
+      "animation_prompt": "The phone screen tilts toward camera as the hidden fee line highlights and the creator reacts in the background.",
+      "references": ["Jack"]
+    },
+    {
+      "file_name": "studio-test/scene_004_savings_plan.png",
+      "image_prompt": "A clean 2D animated finance scene of the creator drawing a simple savings plan on a whiteboard with three steps: cut waste, automate saving, invest slowly, calm confident expression, cinematic 16:9 composition",
+      "animation_prompt": "The three savings steps appear one by one on the whiteboard while the creator underlines the final step.",
+      "references": ["Jack"]
+    },
+    {
+      "file_name": "studio-test/scene_005_goal_reached.png",
+      "image_prompt": "A clean 2D animated finance scene of the creator celebrating a completed savings goal, progress bar at 100 percent on a laptop, warm morning light, tidy workspace, satisfying final frame, cinematic 16:9 composition",
+      "animation_prompt": "The progress bar fills to 100 percent as warm light sweeps across the desk and the creator smiles with relief.",
+      "references": ["Jack"]
+    }
+  ]
+}

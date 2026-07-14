@@ -1,0 +1,24 @@
+{
+  "prompts": [
+    {
+      "file_name": "offline-cache-test/001_jack_reviews_generated_images.png",
+      "image_prompt": "A clean 2D animated finance YouTube scene. Jack, a friendly young narrator in a simple hoodie, sits at a desk reviewing four newly generated image thumbnails on a laptop. The room is modern and warm, with a small chart board in the background, crisp shapes, soft shadows, clear composition, 16:9.",
+      "animation_prompt": "Jack leans toward the laptop, points at the thumbnails, then smiles as the screen glow reflects softly on his face."
+    },
+    {
+      "file_name": "offline-cache-test/002_remote_links_expire.png",
+      "image_prompt": "A simple 2D explainer scene showing a cloud link fading on one side and a secure local archive box glowing on the other side. Jack stands between them holding a small image card labeled local cache. Modern finance YouTube style, clean icons, readable visual metaphor, 16:9.",
+      "animation_prompt": "The cloud link flickers and fades while the local archive box lights up; Jack moves the image card into the archive."
+    },
+    {
+      "file_name": "offline-cache-test/003_offline_preview_recovery.png",
+      "image_prompt": "A polished 2D app-style scene of Jack opening AutoFlow Studio offline. The Wi-Fi icon is crossed out, but image previews still appear in a neat gallery grid from local storage. Calm confident mood, dark UI accents, finance video production workspace, 16:9.",
+      "animation_prompt": "The Wi-Fi icon turns off, then the gallery thumbnails load one by one from the local cache while Jack gives a relieved nod."
+    },
+    {
+      "file_name": "offline-cache-test/004_cache_success_check.png",
+      "image_prompt": "A final confirmation scene in simple 2D animated finance style. Jack stands beside a checklist titled Cache Test: generated, stored, reopened, offline. All checkmarks are green. The background includes a small timeline and image cards, clean professional YouTube frame, 16:9.",
+      "animation_prompt": "Each checklist item ticks on in sequence, then Jack gives a small thumbs-up as the image cards settle into place."
+    }
+  ]
+}

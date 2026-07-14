@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "build:studio": "node scripts/build-studio.mjs",
-    "test": "node test/project-prompt-import.smoke.js && node test/generate-surface.smoke.js && node test/studio-workspace.smoke.js"
+    "architecture:check": "node scripts/check-architecture-budgets.mjs",
+    "test:contracts": "node test/project-services-contracts.smoke.js && node test/runtime-events.smoke.js && node test/loader-order.smoke.js",
+    "test": "node test/project-prompt-import.smoke.js && node test/generate-surface.smoke.js && node test/studio-workspace.smoke.js && npm run test:contracts"
   },
   "dependencies": {
     "@fontsource/poppins": "5.2.7",

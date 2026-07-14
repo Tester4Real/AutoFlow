@@ -36,6 +36,34 @@
     return project?.display_name || project?.name || "Project";
   }
 
+  function buildFlowContextId(flowProjectId) {
+    const key = String(flowProjectId || "").trim();
+    return key ? `flow:${key}` : "";
+  }
+
+  async function getCurrentFlowContext(project) {
+    const flowProjectId =
+      typeof tfCurrentFlowProjectId === "function" ? await tfCurrentFlowProjectId() : "";
+    const flowContextId = buildFlowContextId(flowProjectId);
+    if (flowContextId) {
+      return {
+        flow_context_id: flowContextId,
+        status: "connected",
+        project_id: String(flowProjectId || "").trim(),
+        updated_at: new Date().toISOString(),
+      };
+    }
+    if (project?.flow_context) return Object.assign({}, project.flow_context);
+    if (project?.current_flow_context_id) {
+      return {
+        flow_context_id: project.current_flow_context_id,
+        status: "unknown",
+        updated_at: new Date().toISOString(),
+      };
+    }
+    return { flow_context_id: "", status: "disconnected", updated_at: new Date().toISOString() };
+  }
+
   async function refreshActiveProject() {
     state.loadingProject = true;
     try {
@@ -57,10 +85,42 @@
   }
 
   function currentRecords() {
-    if (Array.isArray(state.importResult?.records)) return state.importResult.records;
-    return Array.isArray(state.activeProject?.prompt_records)
+    const importId = currentImportId();
+    if (!importId) return [];
+    const projectRecords = Array.isArray(state.activeProject?.prompt_records)
       ? state.activeProject.prompt_records
       : [];
+    const records = projectRecords.filter((record) => recordImportId(record) === importId);
+    if (records.length || !Array.isArray(state.importResult?.records)) return records;
+    return state.importResult.records.filter((record) => recordImportId(record) === importId);
+  }
+
+  function currentImportId() {
+    return String(state.importResult?.import_record?.import_id || "").trim();
+  }
+
+  function currentImportName() {
+    const importRecord = state.importResult?.import_record || {};
+    return (
+      state.fileName ||
+      String(
+        importRecord.video_name ||
+          importRecord.display_name ||
+          importRecord.source_name ||
+          "Imported JSON",
+      ).trim()
+    );
+  }
+
+  function recordImportId(record) {
+    return String(record?.source?.import_id || record?.import_id || "").trim();
+  }
+
+  function recordsForRemoval(project) {
+    const importId = currentImportId();
+    const records = Array.isArray(project?.prompt_records) ? project.prompt_records : [];
+    if (!importId) return [];
+    return records.filter((record) => recordImportId(record) === importId);
   }
 
   function isReady(record) {
@@ -273,6 +333,7 @@
       const promptIndex = Number(message.promptIndex || 0);
       const promptId = String(batch.settings?.perPromptIds?.[promptIndex] || "");
       if (!promptId || !message.mediaId) return;
+      const flowContext = await getCurrentFlowContext(project);
       const variants = Array.isArray(project.image_variants) ? project.image_variants.slice() : [];
       const existingIndex = variants.findIndex(
         (variant) =>
@@ -305,9 +366,11 @@
         expected_file_name: promptRecord?.file_name || message.fileName || "image.png",
         generated_file_name: message.fileName || promptRecord?.file_name || "image.png",
         media_id: message.mediaId,
+        flow_context_id: flowContext.flow_context_id || "",
         thumbnail_url: message.fifeUrl || "",
         fife_url: message.fifeUrl || "",
         file_state: "remote",
+        cache_state: existingIndex >= 0 ? variants[existingIndex].cache_state || "pending" : "pending",
         repair_state: "",
         status: "available",
         created_at: existingIndex >= 0 ? variants[existingIndex].created_at : timestamp,
@@ -335,11 +398,44 @@
             })
           : record,
       );
-      await domain.updateProject(projectId, {
+      const updates = {
         image_variants: variants,
         image_generation_runs: nextRuns,
         prompt_records: promptRecords,
+      };
+      if (flowContext.flow_context_id) {
+        updates.current_flow_context_id = flowContext.flow_context_id;
+        updates.flow_context = flowContext;
+      }
+      await domain.updateProject(projectId, updates);
+      return;
+    }
+
+    if (message.subType === "PREVIEW_CACHED" && message.mediaType !== "video") {
+      const mediaId = String(message.mediaId || "").trim();
+      if (!mediaId) return;
+      const variants = Array.isArray(project.image_variants) ? project.image_variants.slice() : [];
+      const existingIndex = variants.findIndex(
+        (variant) =>
+          variant.media_id === mediaId &&
+          (!batch.id || variant.image_run_id === batch.id),
+      );
+      if (existingIndex < 0) return;
+      variants[existingIndex] = Object.assign({}, variants[existingIndex], {
+        cache_key: message.cacheKey || variants[existingIndex].cache_key || "",
+        cached_file_name:
+          message.cachedFileName ||
+          message.fileName ||
+          variants[existingIndex].cached_file_name ||
+          variants[existingIndex].generated_file_name ||
+          "",
+        cache_mime_type: message.mimeType || variants[existingIndex].cache_mime_type || "image/png",
+        cache_byte_length: Number(message.byteLength || variants[existingIndex].cache_byte_length || 0),
+        cache_state: "available",
+        file_state: variants[existingIndex].file_state === "remote" ? "cached" : variants[existingIndex].file_state || "cached",
+        updated_at: timestamp,
       });
+      await domain.updateProject(projectId, { image_variants: variants });
       return;
     }
 
@@ -484,7 +580,7 @@
   }
 
   function setActionsDisabled(disabled) {
-    ["#btn-import-json-generate", "#btn-replace-json", "#btn-add-to-queue", "#btn-generate"].forEach(
+    ["#btn-import-json-generate", "#btn-replace-json", "#btn-remove-json", "#btn-add-to-queue", "#btn-generate"].forEach(
       (selector) => {
         const element = q(selector);
         element && (element.disabled = disabled);
@@ -503,7 +599,8 @@
     const records = currentRecords(),
       stats = statsFor(records),
       hasProject = !!state.activeProject,
-      hasRecords = stats.total > 0,
+      hasCurrentImport = !!currentImportId(),
+      hasRecords = hasCurrentImport && stats.total > 0,
       running = "function" == typeof nr && nr(),
       importDisabled = !hasProject || state.importing || running;
 
@@ -528,7 +625,7 @@
     setDisplay("#generate-actions", hasRecords);
     setDisplay("#generate-blocked-row", stats.blocked > 0);
 
-    setText("#generate-json-name", state.fileName || projectName(state.activeProject));
+    setText("#generate-json-name", hasCurrentImport ? currentImportName() : "Imported JSON");
     setText(
       "#generate-json-meta",
       `${stats.total} prompt${stats.total === 1 ? "" : "s"}`,
@@ -558,6 +655,9 @@
     q("#btn-import-json-generate") &&
       (q("#btn-import-json-generate").disabled = importDisabled);
     q("#btn-replace-json") && (q("#btn-replace-json").disabled = importDisabled);
+    q("#btn-remove-json") &&
+      (q("#btn-remove-json").disabled =
+        importDisabled || !hasCurrentImport || !hasRecords || state.importing || running);
   }
 
   function importJson() {
@@ -587,6 +687,131 @@
     }
   }
 
+  async function removeCurrentJson(options = {}) {
+    const domain = root.TFProjectDomain;
+    const project = state.activeProject || (await refreshActiveProject());
+    if (!domain?.updateProject || !project) {
+      throw new Error("No active Channel JSON to remove.");
+    }
+
+    const removableRecords = recordsForRemoval(project).filter(Boolean);
+    if (!removableRecords.length) {
+      Te("Import or select a JSON package before removing it.", "warn");
+      return { removed_count: 0 };
+    }
+
+    const promptIds = new Set(
+      removableRecords.map((record) => String(record.prompt_id || "").trim()).filter(Boolean),
+    );
+    const importIds = new Set(
+      removableRecords.map(recordImportId).filter(Boolean),
+    );
+    const importId = currentImportId();
+    if (importId) importIds.add(importId);
+
+    const title = currentImportName();
+    const confirmText = `Remove "${title}" from this Channel?\n\nThis clears only this JSON package's prompts, queued work, generated image records, and local cache links from AutoFlow.`;
+    if (
+      !options.skipConfirm &&
+      typeof root.confirm === "function" &&
+      !root.confirm(confirmText)
+    ) {
+      return { removed_count: 0, cancelled: true };
+    }
+
+    const imageRuns = Array.isArray(project.image_generation_runs)
+      ? project.image_generation_runs
+      : [];
+    const removedRunIds = new Set();
+    const nextRuns = imageRuns.filter((run) => {
+      const requestItems = Array.isArray(run?.request_items) ? run.request_items : [];
+      const belongsToRemovedPrompts = requestItems.some((item) =>
+        promptIds.has(String(item?.prompt_id || "").trim()),
+      );
+      if (belongsToRemovedPrompts) {
+        removedRunIds.add(String(run.image_run_id || "").trim());
+        return false;
+      }
+      return true;
+    });
+
+    const removedVariantIds = new Set();
+    const removedMediaIds = new Set();
+    const nextVariants = (Array.isArray(project.image_variants) ? project.image_variants : []).filter(
+      (variant) => {
+        const remove =
+          promptIds.has(String(variant?.prompt_id || "").trim()) ||
+          removedRunIds.has(String(variant?.image_run_id || "").trim());
+        if (remove) {
+          const variantId = String(variant?.variant_id || "").trim();
+          const mediaId = String(variant?.media_id || variant?.mediaId || "").trim();
+          if (variantId) removedVariantIds.add(variantId);
+          if (mediaId) removedMediaIds.add(mediaId);
+          return false;
+        }
+        return true;
+      },
+    );
+
+    const removedJobIds = new Set();
+    const nextJobs = (Array.isArray(project.video_jobs) ? project.video_jobs : []).filter((job) => {
+      const remove = promptIds.has(String(job?.prompt_id || "").trim());
+      if (remove) {
+        const jobId = String(job?.job_id || "").trim();
+        const mediaId = String(job?.output_media_id || "").trim();
+        if (jobId) removedJobIds.add(jobId);
+        if (mediaId) removedMediaIds.add(mediaId);
+        return false;
+      }
+      return true;
+    });
+
+    const nextMediaLinks = (Array.isArray(project.media_links) ? project.media_links : []).filter(
+      (link) => {
+        const ownerId = String(link?.owner_id || "").trim();
+        const flowMediaId = String(link?.flow_media_id || link?.media_id || "").trim();
+        return (
+          !removedVariantIds.has(ownerId) &&
+          !removedJobIds.has(ownerId) &&
+          !removedMediaIds.has(flowMediaId)
+        );
+      },
+    );
+
+    const nextPromptImports = (Array.isArray(project.prompt_imports) ? project.prompt_imports : []).filter(
+      (item) => {
+        const itemId = String(item?.import_id || "").trim();
+        return itemId && !importIds.has(itemId);
+      },
+    );
+    const nextPromptRecords = (Array.isArray(project.prompt_records) ? project.prompt_records : []).filter(
+      (record) => !promptIds.has(String(record?.prompt_id || "").trim()),
+    );
+
+    const persisted = await domain.updateProject(project.project_id, {
+      prompt_imports: nextPromptImports,
+      prompt_records: nextPromptRecords,
+      image_generation_runs: nextRuns,
+      image_variants: nextVariants,
+      video_jobs: nextJobs,
+      media_links: nextMediaLinks,
+    });
+    if (!persisted?.ok) {
+      throw new Error(persisted?.error?.message || "Could not remove Channel JSON.");
+    }
+
+    state.fileName = "";
+    state.importResult = null;
+    state.activeProject = persisted.project;
+    root.TFProjectSidePanelSelector?.refresh?.("prompt-remove");
+    render();
+    Te(
+      `Removed ${removableRecords.length} prompt${removableRecords.length === 1 ? "" : "s"} from ${projectName(project)}`,
+      "success",
+    );
+    return { removed_count: removableRecords.length, project: persisted.project };
+  }
+
   function queueFolderName() {
     return tfSafeFolderName(projectName(state.activeProject), "turboflow");
   }
@@ -594,9 +819,8 @@
   async function createBatchFromReady() {
     const records = readyRecords();
     if (!records.length) return null;
-    const batchName = state.fileName
-        ? tfBatchNameFromFile(state.fileName)
-        : projectName(state.activeProject),
+    const importName = currentImportName(),
+      batchName = tfBatchNameFromFile(importName || "imported-json"),
       projectFolder = queueFolderName(),
       firstFile = tfCleanDownloadPath(records[0]?.file_name || "media/item.png", "png"),
       mediaFolder = tfFolderFromPath(firstFile),
@@ -687,6 +911,9 @@
   function attach() {
     q("#btn-import-json-generate")?.addEventListener("click", importJson);
     q("#btn-replace-json")?.addEventListener("click", importJson);
+    q("#btn-remove-json")?.addEventListener("click", () => {
+      removeCurrentJson().catch((error) => Te(error.message || String(error), "error"));
+    });
     q("#btn-open-studio-blocked")?.addEventListener("click", () => {
       q("#btn-open-project-studio")?.click();
     });
@@ -727,6 +954,7 @@
   root.tfPrepareStudioImageBatch = prepareStudioImageBatch;
   root.tfHandleStudioGenerationMessage = handleStudioGenerationMessage;
   root.tfRestoreStoredGalleryPreviews = restoreStoredGalleryPreviews;
+  root.tfRemoveGenerateJson = removeCurrentJson;
 
   if (root.document.readyState === "loading") {
     root.document.addEventListener("DOMContentLoaded", attach, { once: true });

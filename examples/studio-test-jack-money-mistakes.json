@@ -1,0 +1,34 @@
+{
+  "prompts": [
+    {
+      "file_name": "jack-money-mistakes/scene_001_receipt_shock.png",
+      "image_prompt": "Jack standing at a kitchen counter covered with receipts, looking surprised as he realizes how much small purchases added up, clean 2D animated finance storytelling style, expressive face, warm apartment lighting, cinematic 16:9 composition",
+      "animation_prompt": "Receipts slide across the counter as Jack picks one up and his eyes widen.",
+      "references": ["Jack"]
+    },
+    {
+      "file_name": "jack-money-mistakes/scene_002_subscription_trap.png",
+      "image_prompt": "Jack looking at a laptop screen filled with subscription logos and monthly charges, one forgotten subscription highlighted in red, modern desk setup, clean 2D animated finance storytelling style, cinematic 16:9 composition",
+      "animation_prompt": "The forgotten subscription row pulses red while Jack slowly leans closer to the screen.",
+      "references": ["Jack"]
+    },
+    {
+      "file_name": "jack-money-mistakes/scene_003_impulse_buy.png",
+      "image_prompt": "Jack holding a shopping bag outside a store, pausing before buying another gadget, split expression between excitement and doubt, city storefront background, clean 2D animated finance storytelling style, cinematic 16:9 composition",
+      "animation_prompt": "Camera pushes in as Jack looks from the shopping bag to his phone budget app.",
+      "references": ["Jack"]
+    },
+    {
+      "file_name": "jack-money-mistakes/scene_004_budget_reset.png",
+      "image_prompt": "Jack sitting calmly at a desk rewriting his monthly budget in a notebook, simple categories for needs wants savings and debt, laptop nearby, focused mood, clean 2D animated finance storytelling style, cinematic 16:9 composition",
+      "animation_prompt": "The budget categories appear one by one as Jack checks each line with a pen.",
+      "references": ["Jack"]
+    },
+    {
+      "file_name": "jack-money-mistakes/scene_005_smarter_choice.png",
+      "image_prompt": "Jack walking past a store with confidence, phone showing a completed savings transfer, subtle smile, bright morning street, clean 2D animated finance storytelling style, satisfying final frame, cinematic 16:9 composition",
+      "animation_prompt": "Jack walks past the store as the phone screen shows the savings transfer completed.",
+      "references": ["Jack"]
+    }
+  ]
+}

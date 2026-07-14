@@ -15,6 +15,20 @@ async function Ot(e, t = 3, a = 3e3) {
         await we(o));
     }
 }
+function tfQueueGeneratedImagePreviewCache(e) {
+  if (typeof tfCacheGeneratedImagePreview !== "function") return;
+  tfCacheGeneratedImagePreview(e).catch((e) => {
+    if (typeof Yt === "function") {
+      Yt(`Preview cache skipped: ${e.message}`, "warn");
+    } else if (typeof zt === "function") {
+      zt("LOG", {
+        message: `Preview cache skipped: ${e.message}`,
+        type: "warn",
+        level: "debug",
+      });
+    }
+  });
+}
 async function Pt(e, t, a) {
   const r = await Qe(),
     o = await Xe();
@@ -82,13 +96,14 @@ async function Pt(e, t, a) {
                       break;
                     }
                   }
+                const previewFileName = tfExactDownloadName(w, a, "", "png", o);
                 (Y.set(i, {
                   fifeUrl: r,
                   prompt: e,
                   promptIndex: a,
                   type: "image",
                   seed: t.seed,
-                  fileName: tfExactDownloadName(w, a, "", "png", o),
+                  fileName: previewFileName,
                 }),
                   kt(i, n),
                   zt("PREVIEW_READY", {
@@ -98,7 +113,14 @@ async function Pt(e, t, a) {
                     prompt: e.substring(0, 60),
                     mediaType: "image",
                     uiBatchId: w?.uiBatchId || null,
-                    fileName: tfExactDownloadName(w, a, "", "png", o),
+                    fileName: previewFileName,
+                  }),
+                  tfQueueGeneratedImagePreviewCache({
+                    mediaId: i,
+                    fifeUrl: r,
+                    promptIndex: a,
+                    uiBatchId: w?.uiBatchId || null,
+                    fileName: previewFileName,
                   }));
               }
             }
@@ -131,6 +153,18 @@ async function Pt(e, t, a) {
 async function St(e, t, a = null) {
   const r = Date.now(),
     o = a || e.map((e, t) => t);
+  const failStartup = (message, code = "script_failed") => {
+    o.forEach((promptIndex) => {
+      zt("PROMPT_STATUS", {
+        promptIndex,
+        status: "failed",
+        error: message,
+        uiBatchId: t.uiBatchId || null,
+      });
+    });
+    _t(code);
+    f = !1;
+  };
   (ht(), (pt = t._autoChained || !1));
   const n = t.mode || "image";
   Kt("âš™ï¸ Preparing batch...", "info");
@@ -179,22 +213,19 @@ async function St(e, t, a = null) {
   )
     return (
       Kt("âŒ No Flow tab found â€” open Google Flow and try again", "error"),
-      _t("script_failed"),
-      void (f = !1)
+      void failStartup("No Flow tab found - open Google Flow and try again")
     );
   const h = await Qe(!0);
   if (!h)
     return (
       Kt("âŒ Authentication failed â€” try refreshing the Flow page", "error"),
-      _t("script_failed"),
-      void (f = !1)
+      void failStartup("Authentication failed - refresh the Flow page")
     );
   const _ = await Xe();
   if (!_)
     return (
       Kt("âŒ No project open â€” create or open a project in Flow", "error"),
-      _t("script_failed"),
-      void (f = !1)
+      void failStartup("No Flow project open - create or open a project in Flow")
     );
   if (!(await Ze()))
     return (
@@ -202,8 +233,7 @@ async function St(e, t, a = null) {
         "âŒ Security check failed â€” refresh the Flow page. Disable VPN if active.",
         "error",
       ),
-      _t("recaptcha_blocked"),
-      void (f = !1)
+      void failStartup("Security check failed - refresh Flow page", "recaptcha_blocked")
     );
   (Kt("âœ… Connected", "success"),
     (lt = Date.now()),
@@ -402,13 +432,14 @@ async function Mt(e, t, a, r, o) {
                     break;
                   }
                 }
+              const previewFileName = tfExactDownloadName(w, l, "", "png", m);
               (Y.set(r, {
                 fifeUrl: e,
                 prompt: o,
                 promptIndex: l,
                 type: "image",
                 seed: a,
-                fileName: tfExactDownloadName(w, l, "", "png", m),
+                fileName: previewFileName,
               }),
                 kt(r, flowBatchId),
                 zt("PREVIEW_READY", {
@@ -418,7 +449,14 @@ async function Mt(e, t, a, r, o) {
                   prompt: o.substring(0, 60),
                   mediaType: "image",
                   uiBatchId: t.uiBatchId || null,
-                  fileName: tfExactDownloadName(w, l, "", "png", m),
+                  fileName: previewFileName,
+                }),
+                tfQueueGeneratedImagePreviewCache({
+                  mediaId: r,
+                  fifeUrl: e,
+                  promptIndex: l,
+                  uiBatchId: t.uiBatchId || null,
+                  fileName: previewFileName,
                 }));
             }
           }

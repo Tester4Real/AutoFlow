@@ -185,6 +185,9 @@
         ? source.image_variants.filter(isObject).map(clone)
         : [],
       video_jobs: videoJobs.filter(isObject).map(clone),
+      media_links: Array.isArray(source.media_links)
+        ? source.media_links.filter(isObject).map(clone)
+        : [],
       created_at: createdAt,
       updated_at: updatedAt,
     });
@@ -463,6 +466,9 @@
       }
       if (Array.isArray(patch.video_jobs)) {
         project.video_jobs = patch.video_jobs.filter(isObject).map(clone);
+      }
+      if (Array.isArray(patch.media_links)) {
+        project.media_links = patch.media_links.filter(isObject).map(clone);
       }
       project.updated_at = nowIso();
 
